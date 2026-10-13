@@ -92,6 +92,64 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     page.click('#run')
     expect(page.locator('#notice')).to_contain_text('distinct pickup/dropoff stations')
     assert not page.locator('#run').is_disabled()
+    # Custom map and JSON strategy end-to-end.
+    page.click('[data-tab="tasks"]')
+    page.locator('[data-key="dropoff"]').select_option('A2')
+    page.click('[data-tab="map-editor"]')
+    expect(page.locator('#edge-rows tr')).to_have_count(18)
+    page.fill('[data-edge="1"]', '40')
+    page.click('#apply-map')
+    expect(page.locator('#map-edit-status')).to_have_text('Applied')
+    with page.expect_download() as download_info:
+        page.click('#export-map')
+    destination = Path(tmp) / 'map.json'
+    download_info.value.save_as(destination)
+    world = json.loads(destination.read_text())
+    assert world['edges'][1]['length_m'] == 40
+    world['edges'][1]['length_m'] = 30
+    page.locator('#map-file').set_input_files({'name': 'map.json', 'mimeType': 'application/json', 'buffer': json.dumps(world).encode()})
+    expect(page.locator('[data-edge="1"]')).to_have_value('30')
+    if args.screenshots:
+        page.screenshot(path=str(Path(args.screenshots) / 'map-editor.png'), full_page=True)
+    page.click('[data-tab="strategy-editor"]')
+    page.fill('#rule-name', 'My priority experiment')
+    page.fill('#rule-robots', 'R2, R1, R4, R3')
+    page.click('#apply-strategy')
+    expect(page.locator('#strategy')).to_have_value('custom')
+    with page.expect_download() as download_info:
+        page.click('#export-strategy')
+    destination = Path(tmp) / 'strategy.json'
+    download_info.value.save_as(destination)
+    rules = json.loads(destination.read_text())
+    assert rules['preferred_robots'][0] == 'R2'
+    rules['name'] = 'Imported experiment'
+    page.locator('#strategy-file').set_input_files({'name': 'strategy.json', 'mimeType': 'application/json', 'buffer': json.dumps(rules).encode()})
+    expect(page.locator('#rule-name')).to_have_value('Imported experiment')
+    page.fill('#strategy-json', '{"name":"incomplete"}')
+    page.click('#apply-strategy-json')
+    expect(page.locator('#notice')).to_contain_text('must contain')
+    if args.screenshots:
+        page.screenshot(path=str(Path(args.screenshots) / 'strategy-editor.png'), full_page=True)
+    page.click('[data-tab="simulation"]')
+    page.click('#run')
+    page.wait_for_function('result.strategy === "custom"')
+    assert page.evaluate('result.summary.makespan') == 60
+    assert page.evaluate('result.summary.energy') == 4
+    assert page.evaluate('result.tasks[0].robot_id') == 'R2'
+    assert page.locator('#edge-time').is_disabled()
+    page.click('[data-tab="analytics"]')
+    page.click('#compare')
+    expect(page.locator('#comparison tbody tr')).to_have_count(4)
+    page.reload()
+    expect(page.locator('#map-source')).to_contain_text('Custom map')
+    expect(page.locator('#strategy')).to_have_value('custom')
+    page.click('[data-tab="strategy-editor"]')
+    expect(page.locator('#rule-name')).to_have_value('Imported experiment')
+    page.click('[data-tab="simulation"]')
+    page.locator('#strategy').select_option('joint')
+    page.reload()
+    expect(page.locator('#map-source')).to_contain_text('Custom map')
+    expect(page.locator('#strategy')).to_have_value('joint')
     page.set_viewport_size({'width': 390, 'height': 844})
     page.click('[data-tab="guide"]')
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
@@ -101,4 +159,4 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
         page.screenshot(path=str(Path(args.screenshots) / 'mobile.png'), full_page=True)
     assert not errors, errors
     browser.close()
-    print('Browser smoke passed: replay, charts, comparison, CSV/JSON import/export, editor, invalid inputs, mobile, and XSS escaping.')
+    print('Browser smoke passed: replay, charts, comparisons, CSV/JSON import/export, task/map/strategy editors, saved settings, invalid inputs, mobile, and XSS escaping.')

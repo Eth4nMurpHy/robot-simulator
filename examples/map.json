@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "speed_m_per_s": 1.0,
+  "energy_per_m": 0.1,
+  "edges": [
+    {
+      "from": "X",
+      "to": "A1",
+      "length_m": 20
+    },
+    {
+      "from": "A1",
+      "to": "A2",
+      "length_m": 20
+    },
+    {
+      "from": "A2",
+      "to": "A3",
+      "length_m": 20
+    },
+    {
+      "from": "A3",
+      "to": "A4",
+      "length_m": 20
+    },
+    {
+      "from": "A4",
+      "to": "WA",
+      "length_m": 20
+    },
+    {
+      "from": "WA",
+      "to": "X",
+      "length_m": 6.0
+    },
+    {
+      "from": "X",
+      "to": "B1",
+      "length_m": 20
+    },
+    {
+      "from": "B1",
+      "to": "B2",
+      "length_m": 20
+    },
+    {
+      "from": "B2",
+      "to": "B3",
+      "length_m": 20
+    },
+    {
+      "from": "B3",
+      "to": "B4",
+      "length_m": 20
+    },
+    {
+      "from": "B4",
+      "to": "WB",
+      "length_m": 20
+    },
+    {
+      "from": "WB",
+      "to": "X",
+      "length_m": 6.0
+    },
+    {
+      "from": "X",
+      "to": "H",
+      "length_m": 20
+    },
+    {
+      "from": "H",
+      "to": "X",
+      "length_m": 6.0
+    },
+    {
+      "from": "H",
+      "to": "C1",
+      "length_m": 20
+    },
+    {
+      "from": "C1",
+      "to": "H",
+      "length_m": 20
+    },
+    {
+      "from": "H",
+      "to": "C2",
+      "length_m": 20
+    },
+    {
+      "from": "C2",
+      "to": "H",
+      "length_m": 20
+    }
+  ]
+}

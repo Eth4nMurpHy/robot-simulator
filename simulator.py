@@ -1,12 +1,11 @@
 """Deterministic discrete-event reservation simulator. Times are seconds, SOC percent."""
 from __future__ import annotations
-import math
 import random
 import time
 from dataclasses import dataclass, asdict
+from simulator_types import InputError, number
+from customization import LOOPS, parse_map, parse_rules, edge_metrics, ordered_tasks, custom_score
 
-LOOPS = {'A': ['X', 'A1', 'A2', 'A3', 'A4', 'WA'],
-         'B': ['X', 'B1', 'B2', 'B3', 'B4', 'WB']}
 NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
          'A3': [175, 375], 'A4': [365, 375], 'WA': [440, 325],
          'B1': [635, 375], 'B2': [825, 375], 'B3': [825, 165],
@@ -14,22 +13,6 @@ NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
          'C1': [450, 50], 'C2': [550, 50]}
 STRATEGIES = {'fcfs': 'First come, first served', 'deadline': 'Deadline + reservations',
               'joint': 'Joint greedy scheduling'}
-
-
-class InputError(ValueError):
-    pass
-
-
-def number(value, name, low, high):
-    if isinstance(value, bool):
-        raise InputError(f'{name} must be a number.')
-    try:
-        v = float(value)
-    except (ValueError, TypeError):
-        raise InputError(f'{name} must be a number.') from None
-    if not math.isfinite(v) or not low <= v <= high:
-        raise InputError(f'{name} must be between {low} and {high}.')
-    return v
 
 
 @dataclass
@@ -128,8 +111,10 @@ def slot(calendar, earliest, duration, gap=0):
 
 
 class Planner:
-    def __init__(self, config):
+    def __init__(self, config, world=None, rules=None):
         self.c = config
+        self.world = parse_map(world, config)
+        self.rules = rules
         self.robots = [dict(robot_id=f'R{i + 1}', loop=area, node=f'{area}1',
                             time=0., soc=config.initial_soc) for i, area in enumerate('AABB')]
         self.calendars = {'X': [], **{f'C{i + 1}': [] for i in range(config.chargers)}}
@@ -140,6 +125,8 @@ class Planner:
         # Completed records are immutable; copy only mutable planner containers.
         plan = object.__new__(Planner)
         plan.c = self.c
+        plan.world = self.world
+        plan.rules = self.rules
         plan.robots = [dict(r) for r in self.robots]
         plan.calendars = {k: list(v) for k, v in self.calendars.items()}
         plan.actions = list(self.actions)
@@ -156,7 +143,8 @@ class Planner:
         item = dict(robot_id=robot['robot_id'], task_id=task_id, action=action,
                     node=dest, from_node=node, to_node=dest, start_time=robot['time'],
                     end_time=robot['time'] + duration, start_soc=start_soc,
-                    end_soc=robot['soc'], energy=energy, resource=resource)
+                    end_soc=robot['soc'], energy=energy, resource=resource,
+                    distance_m=edge_metrics(self.world, node, dest)[2] if action in ('move', 'cross') else 0)
         self.actions.append(item)
         robot.update(time=item['end_time'], node=dest)
         return item
@@ -167,10 +155,10 @@ class Planner:
             self.action(r, kind, duration, 0 if kind == 'idle' else duration / 60 * self.c.wait_energy_per_min, task_id=tid)
 
     def crossing(self, r, tid):
-        start = slot(self.calendars['X'], r['time'], self.c.crossing_seconds, 2 * self.c.buffer_seconds)
+        duration, energy, _ = edge_metrics(self.world, r['node'], 'X')
+        start = slot(self.calendars['X'], r['time'], duration, 2 * self.c.buffer_seconds)
         self.wait(r, start, 'cross_wait', tid)
-        item = self.action(r, 'cross', self.c.crossing_seconds,
-                           self.c.edge_energy * self.c.crossing_seconds / self.c.edge_seconds,
+        item = self.action(r, 'cross', duration, energy,
                            to='X', task_id=tid, resource='X')
         self.calendars['X'].append(item)
 
@@ -178,7 +166,8 @@ class Planner:
         if dest == 'X':
             self.crossing(r, tid)
         else:
-            self.action(r, 'move', self.c.edge_seconds, self.c.edge_energy, dest, tid)
+            duration, energy, _ = edge_metrics(self.world, r['node'], dest)
+            self.action(r, 'move', duration, energy, dest, tid)
 
     def travel(self, r, dest, tid=''):
         loop = LOOPS[r['loop']]
@@ -195,15 +184,16 @@ class Planner:
         self.travel(r, 'X')
         self.move_edge(r, 'H', '')
         # Queue at H (outside the bays); account for the travel H -> bay.
-        arrival = r['time'] + self.c.edge_seconds
-        arrival_soc = r['soc'] - self.c.edge_energy
-        if arrival_soc < self.c.safety_soc:
-            raise InputError('Insufficient energy to reach a charger safely.')
         rate = self.c.charge_per_min / 60
         drain = self.c.wait_energy_per_min / 60
         choices = []
         for bay, calendar in self.calendars.items():
             if bay == 'X':
+                continue
+            travel_time, travel_energy, _ = edge_metrics(self.world, 'H', bay)
+            arrival = r['time'] + travel_time
+            arrival_soc = r['soc'] - travel_energy
+            if arrival_soc < self.c.safety_soc:
                 continue
             duration = max(0, (self.c.charge_target - arrival_soc) / rate)
             start = slot(calendar, arrival, duration)
@@ -215,9 +205,12 @@ class Planner:
                 if abs(nxt - start) < 1e-8:
                     break
                 start = nxt
-            choices.append((start + duration, start, duration, bay))
-        _, start, duration, bay = min(choices)
-        self.wait(r, start - self.c.edge_seconds, 'charge_wait')
+            if soc >= self.c.safety_soc:
+                choices.append((start + duration, start, duration, bay, travel_time))
+        if not choices:
+            raise InputError('Insufficient energy to reach and queue for a charger safely.')
+        _, start, duration, bay, travel_time = min(choices)
+        self.wait(r, start - travel_time, 'charge_wait')
         self.move_edge(r, bay, '')
         item = self.action(r, 'charge', duration, -duration * rate, resource=bay)
         self.calendars[bay].append(item)
@@ -245,7 +238,8 @@ class Planner:
         # recharge. Also test the actual booked calendar below.
         queue_seconds = 3 * (self.c.charge_target - self.c.safety_soc) / self.c.charge_per_min * 60
         check.wait(r, r['time'] + queue_seconds, 'charge_wait')
-        check.move_edge(r, 'C1', '')
+        bay = min((f'C{i+1}' for i in range(self.c.chargers)), key=lambda b: edge_metrics(self.world, 'H', b)[1])
+        check.move_edge(r, bay, '')
         actual = self.clone()
         actual.charge(actual.robots[robot_index])
 
@@ -253,7 +247,7 @@ class Planner:
         plan = self.clone()
         r = plan.robots[robot_index]
         # Baseline threshold plus a mandatory safe-completion reserve for all strategies.
-        should_charge = strategy == 'fcfs' and r['soc'] < 20
+        should_charge = (strategy == 'fcfs' and r['soc'] < 20) or (self.rules is not None and r['soc'] < self.rules['charge_below_soc'])
         if not should_charge:
             trial = plan.clone()
             try:
@@ -273,6 +267,7 @@ def validate_result(result):
     """Independent checks of returned task/action/resource records, not planner state."""
     errors = []
     cfg = result['config']
+    world = parse_map(result.get('map'), Config.parse(cfg))
     completed = result['tasks']
     if len({t['task_id'] for t in completed}) != len(completed):
         errors.append('Duplicate task assignment')
@@ -304,9 +299,12 @@ def validate_result(result):
                 errors.append(f"{robot['robot_id']}: SOC continuity")
             duration = a['end_time'] - a['start_time']
             action = a['action']
+            if action in ('move', 'cross') and not any(e['from'] == a['from_node'] and e['to'] == a['to_node'] for e in world['edges']):
+                errors.append(f"{robot['robot_id']}: invalid directed edge")
+                continue
             if action == 'move':
-                expected_energy = cfg['edge_energy']
-                if abs(duration - cfg['edge_seconds']) > 1e-6:
+                edge_time, expected_energy, distance = edge_metrics(world, a['from_node'], a['to_node'])
+                if abs(duration - edge_time) > 1e-6 or abs(a.get('distance_m', distance) - distance) > 1e-6:
                     errors.append(f"{robot['robot_id']}: incorrect edge duration")
                 loop = LOOPS[robot['loop']]
                 source, dest = a['from_node'], a['to_node']
@@ -314,8 +312,8 @@ def validate_result(result):
                 if not valid_edge:
                     errors.append(f"{robot['robot_id']}: invalid directed edge")
             elif action == 'cross':
-                expected_energy = cfg['edge_energy'] * cfg['crossing_seconds'] / cfg['edge_seconds']
-                if a['from_node'] not in ('W' + robot['loop'], 'H') or a['to_node'] != 'X' or abs(duration - cfg['crossing_seconds']) > 1e-6:
+                edge_time, expected_energy, distance = edge_metrics(world, a['from_node'], a['to_node'])
+                if a['from_node'] not in ('W' + robot['loop'], 'H') or a['to_node'] != 'X' or abs(duration - edge_time) > 1e-6 or abs(a.get('distance_m', distance) - distance) > 1e-6:
                     errors.append(f"{robot['robot_id']}: invalid crossing")
             elif action in ('cross_wait', 'charge_wait'):
                 expected_energy = duration / 60 * cfg['wait_energy_per_min']
@@ -351,17 +349,22 @@ def validate_result(result):
     return list(dict.fromkeys(errors))
 
 
-def simulate(tasks, config=None, strategy='joint'):
+def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=None):
     started = time.perf_counter()
     tasks = validate_tasks(tasks)
     cfg = Config.parse(config or {})
-    if strategy not in STRATEGIES:
+    if not isinstance(strategy, str) or strategy not in (*STRATEGIES, 'custom'):
         raise InputError('Unknown strategy.')
-    plan = Planner(cfg)
+    rules = parse_rules(custom_strategy) if strategy == 'custom' else None
+    if rules:
+        cfg.charge_target = rules['charge_target']
+    plan = Planner(cfg, world, rules)
     pending = list(tasks)
     while pending:
         # Joint heuristic chooses among the next 8 released/future jobs; no optimality claim.
-        if strategy == 'deadline':
+        if rules:
+            ordered = ordered_tasks(pending, rules)
+        elif strategy == 'deadline':
             ordered = sorted(pending, key=lambda t: (t['due_time'], -t['priority'], t['release_time'], t['task_id']))[:1]
         else:
             ordered = sorted(pending, key=lambda t: (t['release_time'], t['task_id']))[:8 if strategy == 'joint' else 1]
@@ -376,11 +379,15 @@ def simulate(tasks, config=None, strategy='joint'):
                     new = candidate.actions[len(plan.actions):]
                     waits = sum(a['end_time'] - a['start_time'] for a in new if a['action'] in ('cross_wait', 'charge_wait'))
                     energy = sum(max(0, a['energy']) for a in new)
-                    if strategy == 'joint':
+                    distance = sum(a['distance_m'] for a in new)
+                    if rules:
+                        score = custom_score(task, done, waits, energy, distance, rules)
+                    elif strategy == 'joint':
                         score = done['completion_time'] + 3 * task['priority'] * done['tardiness'] + .5 * waits + 2 * energy
                     else:
                         score = done['completion_time']
-                    choices.append((score, task['task_id'], robot['robot_id'], candidate))
+                    rank = rules['preferred_robots'].index(robot['robot_id']) if rules else robot['robot_id']
+                    choices.append((score, task['task_id'], rank, candidate))
                 except InputError as exc:
                     failures.append(str(exc))
         if not choices:
@@ -392,7 +399,8 @@ def simulate(tasks, config=None, strategy='joint'):
     cross_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'cross_wait')
     charge_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'charge_wait')
     occupied = lambda key: sum(a['end_time'] - a['start_time'] for a in plan.calendars[key])
-    result = dict(strategy=strategy, strategy_label=STRATEGIES[strategy], config=asdict(cfg), nodes=NODES,
+    result = dict(strategy=strategy, strategy_label=rules['name'] if rules else STRATEGIES[strategy], config=asdict(cfg), nodes=NODES,
+                  map=plan.world, custom_strategy=rules,
                   robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f"{r['loop']}1", initial_soc=cfg.initial_soc) for r in plan.robots],
                   tasks=sorted(plan.results, key=lambda t: (t['release_time'], t['task_id'])), actions=actions,
                   reservations={k: sorted(v, key=lambda a: a['start_time']) for k, v in plan.calendars.items()})
@@ -412,6 +420,7 @@ def simulate(tasks, config=None, strategy='joint'):
         total_tardiness=sum(t['tardiness'] for t in plan.results), cross_wait=cross_wait, charge_wait=charge_wait,
         average_wait=(cross_wait + charge_wait) / len(tasks),
         energy=sum(max(0, a['energy']) for a in actions),
+        distance_m=sum(a['distance_m'] for a in actions),
         min_soc=min(a['end_soc'] for a in actions), violations=len(errors),
         cross_utilization=occupied('X') / makespan,
         charge_utilization=sum(occupied(f'C{i + 1}') for i in range(cfg.chargers)) / (makespan * cfg.chargers),

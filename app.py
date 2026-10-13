@@ -5,6 +5,7 @@ import logging
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from simulator import InputError, generate_tasks, simulate
+from customization import default_map, DEFAULT_RULES, parse_map, parse_rules
 
 STATIC = Path(__file__).resolve().parent / 'static'
 
@@ -23,7 +24,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self):
-        if self.path == '/api/health':
+        if self.path == '/api/options':
+            self.json_response({'map': default_map(), 'custom_strategy': DEFAULT_RULES})
+        elif self.path == '/api/health':
             self.json_response({'status': 'ok'})
         else:
             super().do_GET()
@@ -39,11 +42,25 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == '/api/generate':
                 self.json_response({'tasks': generate_tasks(data.get('count', 40), data.get('seed', 42), data.get('a_share', .5))})
             elif self.path == '/api/simulate':
-                self.json_response(simulate(data.get('tasks'), data.get('config'), data.get('strategy', 'joint')))
+                self.json_response(simulate(data.get('tasks'), data.get('config'), data.get('strategy', 'joint'), data.get('map'), data.get('custom_strategy')))
+            elif self.path == '/api/validate-customization':
+                output = {}
+                if 'map' in data:
+                    if data['map'] is None:
+                        raise InputError('Map JSON must be an object, not null.')
+                    output['map'] = parse_map(data['map'])
+                if 'custom_strategy' in data:
+                    output['custom_strategy'] = parse_rules(data['custom_strategy'])
+                if not output:
+                    raise InputError('Provide a map or custom_strategy.')
+                self.json_response(output)
             elif self.path == '/api/compare':
                 rows = []
-                for strategy in ('fcfs', 'deadline', 'joint'):
-                    result = simulate(data.get('tasks'), data.get('config'), strategy)
+                strategies = ['fcfs', 'deadline', 'joint']
+                if data.get('strategy') == 'custom':
+                    strategies.append('custom')
+                for strategy in strategies:
+                    result = simulate(data.get('tasks'), data.get('config'), strategy, data.get('map'), data.get('custom_strategy'))
                     rows.append({'strategy': strategy, 'label': result['strategy_label'], **result['summary']})
                 self.json_response({'comparison': rows})
             else:

@@ -49,6 +49,25 @@ class APITests(unittest.TestCase):
         self.assertEqual(len(comparison), 3)
         self.assertTrue(all(c['completed'] == 20 and c['violations'] == 0 for c in comparison))
 
+    def test_customization_validation_and_comparison(self):
+        from customization import DEFAULT_RULES, default_map
+        with urlopen(self.url + '/api/options') as response:
+            options = json.load(response)
+        self.assertEqual(len(options['map']['edges']), 18)
+        self.assertIn('weights', options['custom_strategy'])
+        validated = self.post('/api/validate-customization', {'map': default_map(), 'custom_strategy': DEFAULT_RULES})
+        request = {'tasks': generate_tasks(20), 'strategy': 'custom', **validated}
+        result = self.post('/api/simulate', request)
+        self.assertEqual(result['strategy'], 'custom')
+        self.assertTrue(result['validation']['passed'])
+        comparison = self.post('/api/compare', request)['comparison']
+        self.assertEqual(len(comparison), 4)
+        self.assertEqual(comparison[-1]['strategy'], 'custom')
+        for data in ({'map': {'edges': []}}, {'map': None}, {'custom_strategy': {'name': 'bad'}}):
+            with self.assertRaises(HTTPError) as context:
+                self.post('/api/validate-customization', data)
+            self.assertEqual(context.exception.code, 400)
+
     def test_invalid_payloads_are_400(self):
         for path, data in [('/api/simulate', {'tasks': []}), ('/api/generate', {'count': -1}), ('/api/simulate', {'tasks': generate_tasks(1), 'strategy': 'nope'}), ('/api/simulate', [])]:
             with self.subTest(path=path, data=data):

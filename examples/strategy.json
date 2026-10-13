@@ -1,0 +1,21 @@
+{
+  "name": "My custom strategy",
+  "task_order": "release",
+  "lookahead": 8,
+  "charge_below_soc": 20,
+  "charge_target": 95,
+  "weights": {
+    "completion": 1,
+    "tardiness": 3,
+    "wait": 0.5,
+    "energy": 2,
+    "distance": 0,
+    "priority": 0
+  },
+  "preferred_robots": [
+    "R1",
+    "R2",
+    "R3",
+    "R4"
+  ]
+}
