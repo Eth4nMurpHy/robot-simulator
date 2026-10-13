@@ -56,7 +56,7 @@ class CustomizationTests(unittest.TestCase):
     def test_robot_preference_changes_assignment(self):
         rules = copy.deepcopy(DEFAULT_RULES)
         rules['preferred_robots'] = ['R2', 'R1', 'R4', 'R3']
-        result = simulate([task()], strategy='custom', custom_strategy=rules)
+        result = simulate([task()], strategy='rules', custom_strategy=rules)
         self.assertEqual(result['tasks'][0]['robot_id'], 'R2')
         self.assertEqual(result['custom_strategy'], rules)
 
@@ -64,18 +64,18 @@ class CustomizationTests(unittest.TestCase):
         rules = copy.deepcopy(DEFAULT_RULES)
         rules.update(task_order='priority', lookahead=1)
         tasks = [task('low'), {**task('high'), 'priority': 5}]
-        result = simulate(tasks, strategy='custom', custom_strategy=rules)
+        result = simulate(tasks, strategy='rules', custom_strategy=rules)
         load = next(a for a in result['actions'] if a['action'] == 'load')
         self.assertEqual(load['task_id'], 'high')
         rules.update(task_order='release', lookahead=8)
         rules['weights']['priority'] = 100
-        result = simulate(tasks, strategy='custom', custom_strategy=rules)
+        result = simulate(tasks, strategy='rules', custom_strategy=rules)
         self.assertEqual(next(a for a in result['actions'] if a['action'] == 'load')['task_id'], 'high')
 
     def test_charge_threshold_and_target(self):
         rules = copy.deepcopy(DEFAULT_RULES)
         rules.update(charge_below_soc=80, charge_target=80)
-        result = simulate([task()], strategy='custom', custom_strategy=rules)
+        result = simulate([task()], strategy='rules', custom_strategy=rules)
         charges = [a for a in result['actions'] if a['action'] == 'charge']
         self.assertEqual(len(charges), 1)
         self.assertAlmostEqual(charges[0]['end_soc'], 80)
@@ -88,7 +88,7 @@ class CustomizationTests(unittest.TestCase):
             if e['to'] != 'X':
                 e['length_m'] *= 1.2
         for chargers in (1, 2):
-            result = simulate(generate_tasks(40), {'chargers': chargers, 'initial_soc': 80}, 'custom', world, DEFAULT_RULES)
+            result = simulate(generate_tasks(40), {'chargers': chargers, 'initial_soc': 80}, 'rules', world, DEFAULT_RULES)
             self.assertEqual(result['summary']['completed'], 40)
             self.assertEqual(validate_result(result), [])
 

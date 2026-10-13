@@ -18,6 +18,8 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.goto(args.url)
     expect(page.locator('#task-source')).to_contain_text('40 generated tasks')
+    expect(page.locator('#command-rows tr')).to_have_count(2)
+    page.locator('#strategy').select_option('joint')
     page.click('#run')
     expect(page.locator('#m-completed')).to_have_text('40 / 40')
     expect(page.locator('#m-safety')).to_have_text('0')
@@ -42,8 +44,8 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     expect(page.locator('#comparison tbody tr')).to_have_count(3)
     if args.screenshots:
         page.screenshot(path=str(Path(args.screenshots) / 'analytics.png'), full_page=True)
-    for button, filename, header in [('#export-schedule', 'schedule.csv', 'robot_id,task_id,action'),
-                                      ('#export-events', 'events.csv', 'time,robot_id,event'),
+    for button, filename, header in [('#export-schedule', 'schedule.csv', 'command_index,robot_id,task_id,action'),
+                                      ('#export-events', 'events.csv', 'time,command_index,robot_id,event'),
                                       ('#export-summary', 'summary.csv', 'strategy,makespan')]:
         with page.expect_download() as download_info:
             page.click(button)
@@ -112,19 +114,25 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     if args.screenshots:
         page.screenshot(path=str(Path(args.screenshots) / 'map-editor.png'), full_page=True)
     page.click('[data-tab="strategy-editor"]')
-    page.fill('#rule-name', 'My priority experiment')
-    page.fill('#rule-robots', 'R2, R1, R4, R3')
-    page.click('#apply-strategy')
+    plan = {'name': 'Imported commands', 'commands': [
+        {'robot_id': 'R2', 'at': 10, 'action': 'execute_task', 'task_id': 'CSV-001'}]}
+    page.locator('#strategy-file').set_input_files({'name': 'strategy.json', 'mimeType': 'application/json', 'buffer': json.dumps(plan).encode()})
+    expect(page.locator('#rule-name')).to_have_value('Imported commands')
+    page.select_option('#cmd-robot', 'R2')
+    page.fill('#cmd-at', '70')
+    page.select_option('#cmd-action', 'wait')
+    page.fill('#cmd-duration', '10')
+    page.click('#add-command')
+    expect(page.locator('#command-rows tr')).to_have_count(2)
+    page.click('#apply-strategy-json')
     expect(page.locator('#strategy')).to_have_value('custom')
     with page.expect_download() as download_info:
         page.click('#export-strategy')
     destination = Path(tmp) / 'strategy.json'
     download_info.value.save_as(destination)
-    rules = json.loads(destination.read_text())
-    assert rules['preferred_robots'][0] == 'R2'
-    rules['name'] = 'Imported experiment'
-    page.locator('#strategy-file').set_input_files({'name': 'strategy.json', 'mimeType': 'application/json', 'buffer': json.dumps(rules).encode()})
-    expect(page.locator('#rule-name')).to_have_value('Imported experiment')
+    plan = json.loads(destination.read_text())
+    assert plan['commands'][0]['robot_id'] == 'R2'
+    assert plan['commands'][1]['at'] == 70
     page.fill('#strategy-json', '{"name":"incomplete"}')
     page.click('#apply-strategy-json')
     expect(page.locator('#notice')).to_contain_text('must contain')
@@ -132,19 +140,54 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
         page.screenshot(path=str(Path(args.screenshots) / 'strategy-editor.png'), full_page=True)
     page.click('[data-tab="simulation"]')
     page.click('#run')
-    page.wait_for_function('result.strategy === "custom"')
-    assert page.evaluate('result.summary.makespan') == 60
-    assert page.evaluate('result.summary.energy') == 4
+    page.wait_for_function('result.mode === "commands"')
+    assert page.evaluate('result.summary.makespan') == 80
+    assert page.evaluate('result.tasks[0].completion_time') == 70
+    assert abs(page.evaluate('result.summary.energy') - (4 + 10/60*.2)) < 1e-6
     assert page.evaluate('result.tasks[0].robot_id') == 'R2'
+    assert page.evaluate('result.commands[0].start_time') == 10
     assert page.locator('#edge-time').is_disabled()
     page.click('[data-tab="analytics"]')
-    page.click('#compare')
-    expect(page.locator('#comparison tbody tr')).to_have_count(4)
+    assert page.locator('#compare').is_disabled()
+    expect(page.locator('#gantt svg')).to_be_visible()
+    # Busy commands are rejected with a visible structured report.
+    page.click('[data-tab="strategy-editor"]')
+    busy_plan = json.loads(json.dumps(plan))
+    busy_plan['commands'][1]['at'] = 20
+    page.locator('#strategy-file').set_input_files({'name': 'busy.json', 'mimeType': 'application/json', 'buffer': json.dumps(busy_plan).encode()})
+    page.wait_for_function('customRules.commands[1].at === 20')
+    page.click('[data-tab="simulation"]')
+    page.click('#run')
+    expect(page.locator('#plan-errors')).to_be_visible()
+    expect(page.locator('#error-rows')).to_contain_text('ROBOT_BUSY')
+    expect(page.locator('#error-rows')).to_contain_text('70.000')
+    assert page.evaluate('result.summary.makespan') == 80  # previous valid run preserved
+    with page.expect_download() as download_info:
+        page.click('#export-errors')
+    destination = Path(tmp) / 'errors.json'
+    download_info.value.save_as(destination)
+    assert json.loads(destination.read_text())['errors'][0]['code'] == 'ROBOT_BUSY'
+    for commands, expected in [([
+        {'robot_id':'R1','at':0,'action':'charge','bay':'C1','target_soc':90},
+        {'robot_id':'R2','at':20,'action':'charge','bay':'C1','target_soc':90}], 'CHARGER_CONFLICT'), ([
+        {'robot_id':'R1','at':0,'action':'move_to','node':'H'},
+        {'robot_id':'R3','at':10,'action':'move_to','node':'H'}], 'INTERSECTION_CONFLICT')]:
+        page.click('[data-tab="strategy-editor"]')
+        page.locator('#strategy-file').set_input_files({'name': 'conflict.json', 'mimeType': 'application/json', 'buffer': json.dumps({'name':'Conflicting commands','commands':commands}).encode()})
+        expect(page.locator('#rule-name')).to_have_value('Conflicting commands')
+        page.click('[data-tab="simulation"]')
+        page.click('#run')
+        expect(page.locator('#error-rows')).to_contain_text(expected)
+    if args.screenshots:
+        page.screenshot(path=str(Path(args.screenshots) / 'command-errors.png'), full_page=True)
+    page.click('[data-tab="strategy-editor"]')
+    page.locator('#strategy-file').set_input_files({'name': 'strategy.json', 'mimeType': 'application/json', 'buffer': json.dumps(plan).encode()})
+    expect(page.locator('#rule-name')).to_have_value('Imported commands')
     page.reload()
     expect(page.locator('#map-source')).to_contain_text('Custom map')
     expect(page.locator('#strategy')).to_have_value('custom')
     page.click('[data-tab="strategy-editor"]')
-    expect(page.locator('#rule-name')).to_have_value('Imported experiment')
+    expect(page.locator('#rule-name')).to_have_value('Imported commands')
     page.click('[data-tab="simulation"]')
     page.locator('#strategy').select_option('joint')
     page.reload()
@@ -159,4 +202,4 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
         page.screenshot(path=str(Path(args.screenshots) / 'mobile.png'), full_page=True)
     assert not errors, errors
     browser.close()
-    print('Browser smoke passed: replay, charts, comparisons, CSV/JSON import/export, task/map/strategy editors, saved settings, invalid inputs, mobile, and XSS escaping.')
+    print('Browser smoke passed: replay, charts, comparisons, CSV/JSON import/export, task/map/command editors, busy/resource error reports, saved settings, invalid inputs, mobile, and XSS escaping.')

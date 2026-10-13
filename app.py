@@ -5,7 +5,8 @@ import logging
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from simulator import InputError, generate_tasks, simulate
-from customization import default_map, DEFAULT_RULES, parse_map, parse_rules
+from customization import default_map, parse_map
+from command_plan import DEFAULT_COMMAND_PLAN, parse_command_plan, CommandPlanError
 
 STATIC = Path(__file__).resolve().parent / 'static'
 
@@ -25,7 +26,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/options':
-            self.json_response({'map': default_map(), 'custom_strategy': DEFAULT_RULES})
+            self.json_response({'map': default_map(), 'custom_strategy': DEFAULT_COMMAND_PLAN})
         elif self.path == '/api/health':
             self.json_response({'status': 'ok'})
         else:
@@ -50,7 +51,7 @@ class Handler(SimpleHTTPRequestHandler):
                         raise InputError('Map JSON must be an object, not null.')
                     output['map'] = parse_map(data['map'])
                 if 'custom_strategy' in data:
-                    output['custom_strategy'] = parse_rules(data['custom_strategy'])
+                    output['custom_strategy'] = parse_command_plan(data['custom_strategy'])
                 if not output:
                     raise InputError('Provide a map or custom_strategy.')
                 self.json_response(output)
@@ -58,13 +59,15 @@ class Handler(SimpleHTTPRequestHandler):
                 rows = []
                 strategies = ['fcfs', 'deadline', 'joint']
                 if data.get('strategy') == 'custom':
-                    strategies.append('custom')
+                    raise InputError('Command plans do not assign tasks automatically. Compare automatic examples separately.')
                 for strategy in strategies:
                     result = simulate(data.get('tasks'), data.get('config'), strategy, data.get('map'), data.get('custom_strategy'))
                     rows.append({'strategy': strategy, 'label': result['strategy_label'], **result['summary']})
                 self.json_response({'comparison': rows})
             else:
                 self.json_response({'error': 'Unknown endpoint.'}, 404)
+        except CommandPlanError as exc:
+            self.json_response({'error': str(exc), 'errors': exc.errors}, 422)
         except (InputError, json.JSONDecodeError, ValueError) as exc:
             self.json_response({'error': str(exc)}, 400)
         except Exception:

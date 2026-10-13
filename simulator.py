@@ -287,7 +287,7 @@ def validate_result(result):
     for resource, calendar in result['reservations'].items():
         ordered = sorted(calendar, key=lambda a: a['start_time'])
         gap = 2 * cfg['buffer_seconds'] if resource == 'X' else 0
-        if any(a['end_time'] + gap > b['start_time'] + 1e-8 for a, b in zip(ordered, ordered[1:])):
+        if any((a.get('open_ended', False) or a['end_time'] + gap > b['start_time'] + 1e-8) for a, b in zip(ordered, ordered[1:])):
             errors.append(f'{resource}: overlapping reservations')
     for robot in result['robots']:
         actions = sorted([a for a in result['actions'] if a['robot_id'] == robot['robot_id']], key=lambda a: a['start_time'])
@@ -322,7 +322,7 @@ def validate_result(result):
                     errors.append(f"{robot['robot_id']}: invalid queue location")
             elif action == 'charge':
                 departure = actions[index + 1] if index + 1 < len(actions) else None
-                if departure is None or departure['action'] != 'move' or departure['to_node'] != 'H' or abs(departure['start_time'] - a['end_time']) > 1e-6:
+                if result.get('mode') != 'commands' and (departure is None or departure['action'] != 'move' or departure['to_node'] != 'H' or abs(departure['start_time'] - a['end_time']) > 1e-6):
                     errors.append(f"{robot['robot_id']}: charger not vacated immediately")
                 expected_energy = -duration / 60 * cfg['charge_per_min']
                 if a['from_node'] != a['resource'] or a['to_node'] != a['resource']:
@@ -332,6 +332,10 @@ def validate_result(result):
                 task = next((t for t in completed if t['task_id'] == a['task_id']), None)
                 if task is None or abs(duration - task['load_time' if action == 'load' else 'unload_time']) > 1e-6:
                     errors.append(f"{robot['robot_id']}: incorrect handling duration")
+            elif action == 'wait' and result.get('mode') == 'commands':
+                expected_energy = duration / 60 * cfg['wait_energy_per_min']
+                if a['from_node'] != a['to_node'] or a['from_node'] == 'X':
+                    errors.append(f"{robot['robot_id']}: invalid wait location")
             elif action == 'idle':
                 expected_energy = 0
             else:
@@ -339,7 +343,10 @@ def validate_result(result):
                 errors.append(f"{robot['robot_id']}: unknown action")
             if expected_energy is not None and abs(expected_energy - a['energy']) > 1e-6:
                 errors.append(f"{robot['robot_id']}: incorrect energy model")
-            if action in ('cross', 'charge') and a not in result['reservations'].get(a['resource'], []):
+            booked = a in result['reservations'].get(a['resource'], [])
+            if action == 'charge' and result.get('mode') == 'commands':
+                booked = any(b['robot_id'] == a['robot_id'] and b['start_time'] <= a['start_time'] + 1e-8 and b['end_time'] >= a['end_time'] - 1e-8 for b in result['reservations'].get(a['resource'], []))
+            if action in ('cross', 'charge') and not booked:
                 errors.append(f"{robot['robot_id']}: missing resource reservation")
             if a['from_node'] != node:
                 errors.append(f"{robot['robot_id']}: route continuity")
@@ -350,12 +357,15 @@ def validate_result(result):
 
 
 def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=None):
+    if strategy == 'custom':
+        from command_plan import execute_commands
+        return execute_commands(tasks, config, world, custom_strategy)
     started = time.perf_counter()
     tasks = validate_tasks(tasks)
     cfg = Config.parse(config or {})
-    if not isinstance(strategy, str) or strategy not in (*STRATEGIES, 'custom'):
+    if not isinstance(strategy, str) or strategy not in (*STRATEGIES, 'rules'):
         raise InputError('Unknown strategy.')
-    rules = parse_rules(custom_strategy) if strategy == 'custom' else None
+    rules = parse_rules(custom_strategy) if strategy == 'rules' else None
     if rules:
         cfg.charge_target = rules['charge_target']
     plan = Planner(cfg, world, rules)

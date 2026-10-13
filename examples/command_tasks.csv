@@ -1,0 +1,3 @@
+task_id,release_time,pickup,dropoff,load_time,unload_time,due_time,priority
+T001,0,A1,A2,15,15,600,1
+T002,0,B1,B2,15,15,600,1
