@@ -155,8 +155,9 @@ def figures(rows, summary, strategies, out):
                        label=strategy, color=colors.get(strategy, '#888'), capsize=2)
             ax.set_xticks([i + width * (len(strategies) - 1) / 2 for i in range(len(settings))], settings)
             ax.set_title(f'{title} — {experiment}')
-        axes[0].legend(fontsize=8)
-        fig.tight_layout()
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc='upper center', ncol=len(strategies), fontsize=8, frameon=False)
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
         fig.savefig(out / f'{experiment}.png', dpi=160)
         plt.close(fig)
 

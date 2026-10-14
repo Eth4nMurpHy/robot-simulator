@@ -352,7 +352,7 @@ test.
 ### 6.2 The end-of-horizon reserve
 
 The first CP-SAT experiments did not require any battery left after the last order. The optimiser
-then drained the batteries to the safety threshold and skipped charging whenever the initial charge
+then often ended near the safety threshold and skipped charging whenever the initial charge
 sufficed: on every 20-order instance it never charged, and on 40 orders it charged half as often as
 the heuristics (2.0 vs 3.9–5.4). The heuristics always keep enough charge to reach a bay behind a
 full queue. Imposing the same reserve on CP-SAT raised its $J$ from 0.349 to 0.468 at 40 orders but
@@ -407,7 +407,7 @@ machines); runtimes of course differ.
 
 A simulator for two delivery loops that share one intersection and one charging area was built,
 with an independent validator, a browser replay, and an experiment pipeline that compares six
-strategies on identical, seeded instances. Over 700 validated runs:
+strategies (plus one ablation) on identical, seeded instances. Over 700 validated runs:
 
 1. **Deciding orders, intersection slots and charging jointly pays off.** In the base setting the
    single-rule baselines (FCFS, deadline-first, staged) stay within a few percent of each other, the
