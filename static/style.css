@@ -80,6 +80,8 @@ main { padding: 24px 28px 48px; max-width: 1440px; margin: 0 auto; }
 
 label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
 label output { float: right; color: var(--ink); }
+label.check { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+label.check input[type=checkbox] { width: auto; margin: 0; padding: 0; accent-color: var(--ink); }
 input:not([type=range]):not([type=file]), select, textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -201,7 +203,7 @@ table.dense input:not([type=file]):hover, table.dense select:hover, table.dense 
 .prose p { margin-bottom: 10px; line-height: 1.65; }
 
 @media (max-width: 1000px) {
-  .studio, .split, .split.even { grid-template-columns: 1fr; }
+  .studio, .split, .split.even { grid-template-columns: minmax(0, 1fr); }
   .config { position: static; }
   .fleet { grid-template-columns: repeat(2, 1fr); }
 }

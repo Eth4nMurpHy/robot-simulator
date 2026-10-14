@@ -41,7 +41,7 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     expect(page.locator('#gantt svg')).to_be_visible()
     expect(page.locator('#battery-chart svg')).to_be_visible()
     page.click('#compare')
-    expect(page.locator('#comparison tbody tr')).to_have_count(3)
+    expect(page.locator('#comparison tbody tr')).to_have_count(4)
     if args.screenshots:
         page.screenshot(path=str(Path(args.screenshots) / 'analytics.png'), full_page=True)
     for button, filename, header in [('#export-schedule', 'schedule.csv', 'command_index,robot_id,task_id,action'),
@@ -60,7 +60,7 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     download_info.value.save_as(destination)
     exported = json.loads(destination.read_text())
     assert exported['summary']['completed'] == 40
-    assert len(exported['comparison']) == 3
+    assert len(exported['comparison']) == 4
     page.click('[data-tab="tasks"]')
     expect(page.locator('#task-table tbody tr')).to_have_count(40)
     page.fill('#task-search', 'T001')

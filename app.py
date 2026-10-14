@@ -4,7 +4,7 @@ import json
 import logging
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from simulator import InputError, generate_tasks, random_robot_soc, simulate
+from simulator import STRATEGIES, InputError, generate_tasks, random_robot_soc, simulate
 from customization import default_map, parse_map
 from command_plan import DEFAULT_COMMAND_PLAN, parse_command_plan, CommandPlanError
 
@@ -59,7 +59,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.json_response(output)
             elif self.path == '/api/compare':
                 rows = []
-                strategies = ['fcfs', 'deadline', 'joint']
+                strategies = list(STRATEGIES)
                 if data.get('strategy') == 'custom':
                     raise InputError('Command plans do not assign tasks automatically. Compare automatic examples separately.')
                 for strategy in strategies:

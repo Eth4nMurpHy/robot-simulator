@@ -31,7 +31,7 @@
   <div class="metrics">
     <div><span>Makespan</span><strong id="m-makespan">—</strong></div>
     <div><span>Completed</span><strong id="m-completed">—</strong><small id="m-late"></small></div>
-    <div><span>Average resource wait</span><strong id="m-wait">—</strong></div>
+    <div><span>Average resource wait</span><strong id="m-wait">—</strong><small id="m-objective"></small></div>
     <div><span>Violations</span><strong id="m-safety">—</strong><small id="m-validation"></small></div>
   </div>
 
@@ -81,7 +81,7 @@
 
     <form id="run-form" class="block config">
       <label for="strategy">Strategy</label>
-      <select id="strategy"><option value="custom" selected>My command plan</option><option value="joint">Joint greedy</option><option value="fcfs">FCFS</option><option value="deadline">Deadline + reservations</option></select>
+      <select id="strategy"><option value="custom" selected>My command plan</option><option value="joint">Joint greedy</option><option value="fcfs">FCFS</option><option value="staged">Staged (assign → cross → charge)</option><option value="deadline">Deadline + reservations</option></select>
       <p class="muted" id="map-source"></p>
 
       <h3>Tasks</h3>
@@ -91,6 +91,11 @@
       </div>
       <label for="a-share">Loop A share <output id="share-value">50%</output></label>
       <input id="a-share" type="range" min="0" max="100" value="50">
+      <div class="pair">
+        <div><label for="release-gap">Release gap (s)</label><input id="release-gap" type="number" min="1" max="600" value="12" required></div>
+        <div><label for="urgent">Urgent orders (%)</label><input id="urgent" type="number" min="0" max="100" value="0" required></div>
+      </div>
+      <label class="check"><input id="tight" type="checkbox"> Tight deadlines (4–8 min)</label>
       <button type="button" class="button" id="generate">Generate</button>
       <p class="muted" id="task-source"></p>
 
@@ -103,6 +108,7 @@
       <input id="safety" type="range" min="5" max="30" value="10">
       <label for="initial-soc">Initial charge <output id="soc-value">65%</output></label>
       <input id="initial-soc" type="range" min="40" max="100" value="65">
+      <label class="check"><input id="random-soc" type="checkbox"> Random per robot, 50–100% from seed</label>
 
       <details>
         <summary>Timing</summary>
@@ -205,6 +211,7 @@
       <button class="button" id="export-summary">Summary CSV</button>
       <button class="button" id="export-schedule">Schedule CSV</button>
       <button class="button" id="export-events">Events CSV</button>
+      <button class="button" id="export-robots">Robots CSV</button>
     </div>
     <div class="block">
       <div class="block-head"><h3>Robot activity</h3><div class="legend"><span class="move">Move</span><span class="handle">Load/unload</span><span class="wait">Wait</span><span class="charge">Charge</span></div></div>

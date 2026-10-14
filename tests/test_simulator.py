@@ -1,6 +1,6 @@
 import copy
 import unittest
-from simulator import Config, InputError, STRATEGIES, generate_tasks, simulate, slot, validate_result, validate_tasks
+from simulator import Config, InputError, STRATEGIES, generate_tasks, objective, random_robot_soc, simulate, slot, validate_result, validate_tasks
 
 
 def simple_task(**changes):
@@ -123,6 +123,48 @@ class SimulatorTests(unittest.TestCase):
                     self.assertEqual(departure['action'], 'move')
                     self.assertEqual(departure['to_node'], 'H')
                     self.assertEqual(departure['start_time'], action['end_time'])
+
+    def test_per_robot_initial_soc(self):
+        socs = random_robot_soc(7)
+        self.assertEqual(socs, random_robot_soc(7))
+        self.assertTrue(all(50 <= v <= 100 for v in socs))
+        result = simulate(generate_tasks(20, 7), {'robot_soc': socs}, 'joint')
+        self.assertEqual([r['initial_soc'] for r in result['robots']], socs)
+        for robot, soc in zip(result['robots'], socs):
+            first = min((a for a in result['actions'] if a['robot_id'] == robot['robot_id']), key=lambda a: a['start_time'])
+            self.assertEqual(first['start_soc'], soc)
+        tampered = copy.deepcopy(result)
+        tampered['robots'][0]['initial_soc'] += 5
+        self.assertIn('R1: SOC continuity', validate_result(tampered))
+        for bad in ([80, 80, 80], [80, 80, 80, 101], 'high'):
+            with self.assertRaises(InputError):
+                Config.parse({'robot_soc': bad})
+
+    def test_generator_options_keep_base_workload(self):
+        base = generate_tasks(40, 5)
+        rush = generate_tasks(40, 5, urgent=.2)
+        self.assertEqual([t for t in rush if t['task_id'].startswith('T')], base)
+        urgent = [t for t in rush if t['task_id'].startswith('U')]
+        self.assertEqual(len(urgent), 8)
+        self.assertTrue(all(t['priority'] >= 4 and 180 <= t['due_time'] - t['release_time'] <= 360 for t in urgent))
+        self.assertTrue(all(240 <= t['due_time'] - t['release_time'] <= 480 for t in generate_tasks(40, 5, tight=True)))
+        self.assertLess(max(t['release_time'] for t in base), max(t['release_time'] for t in generate_tasks(40, 5, release_gap=60)))
+        with self.assertRaises(InputError):
+            generate_tasks(200, 5, urgent=.5)
+
+    def test_staged_assignment_ignores_resources(self):
+        tasks = generate_tasks(30, 11)
+        result = simulate(tasks, {}, 'staged')
+        self.assertTrue(result['validation']['passed'])
+        self.assertEqual(result['summary']['completed'], 30)
+        # Stage 1 balances work on nominal times only, so both robots of each loop are used.
+        self.assertEqual({t['robot_id'] for t in result['tasks']}, {'R1', 'R2', 'R3', 'R4'})
+
+    def test_objective_matches_summary(self):
+        result = simulate(generate_tasks(20, 3), {}, 'joint')
+        s = result['summary']
+        self.assertAlmostEqual(s['objective'], objective(result['tasks'], s['makespan'], s['cross_wait'] + s['charge_wait'], s['energy']))
+        self.assertAlmostEqual(objective([dict(priority=2, tardiness=10)], 100, 20, 5), 100 + 3 * 20 + 10 + 10)
 
 
 if __name__ == '__main__':
