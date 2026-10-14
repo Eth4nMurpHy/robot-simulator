@@ -3,29 +3,29 @@
 `optimizer.py` models task assignment, order, intersection reservations, optional
 charging visits, bay selection, charge timing and charge amount together. The
 simulator remains the authority for the returned times, energy, and validation.
-No UI or compare endpoint integration is included.
+Both strategies are available in the dashboard and `/api/compare` when the server
+runs with OR-Tools.
 
 ## Calling and reproducibility
 
 ```python
 from simulator import generate_tasks, simulate
 result = simulate(generate_tasks(40, 1), {}, 'cpsat', None,
-                  {'time_limit': 30, 'seed': 1, 'workers': 1})
+                  {'time_limit': 60, 'workers': 8})
 online = simulate(generate_tasks(40, 1), {}, 'rolling', None,
                   {'replan_seconds': 60, 'horizon_seconds': 600})
 ```
 
 Use `.venv/bin/python`. `simulator` lazily imports the optimizer only for these
 two strategies and raises `InputError` with installation guidance if OR-Tools is
-unavailable. `STRATEGIES` continues to enumerate the three heuristic examples;
-`OPTIMIZER_STRATEGIES` supplies the new dispatch labels without changing existing
-heuristic iteration or `/api/compare`.
+unavailable. `STRATEGIES` enumerates the four heuristics; `OPTIMIZER_STRATEGIES`
+supplies the two optimizer labels.
 
 | Option | Offline default | Rolling default | Meaning |
 |---|---:|---:|---|
-| `time_limit` | 10 | 2 | Wall-clock limit in seconds **per CP-SAT call** |
-| `deterministic_time` | `0.05 * time_limit` | same | CP-SAT deterministic work limit |
-| `workers` | 1 | 1 | CP-SAT search workers |
+| `time_limit` | 60 | 2 | Wall-clock limit in seconds **per CP-SAT call** |
+| `deterministic_time` | 3600 with several workers, else `0.05 * time_limit` | `0.05 * time_limit` | CP-SAT deterministic work limit |
+| `workers` | `min(8, cpu_count)` | 1 | CP-SAT search workers |
 | `seed` | 0 | 0 | CP-SAT random seed |
 | `replan_seconds` | 60 | 60 | Period between online decision epochs |
 | `horizon_seconds` | 600 | 600 | Estimated work window per robot |
@@ -44,7 +44,15 @@ multiple workers can change the incumbent. For reproducibility experiments set
 an explicit deterministic limit and a generous wall limit. Runtime includes
 model construction, the heuristic, solving, decoding and validation; solver
 `wall_time` measures CP-SAT only. A 30-second limit can therefore finish much
-sooner when its default 1.5 deterministic-time budget is exhausted.
+sooner when a single-worker deterministic budget is exhausted.
+
+Offline solves use parallel workers by default because a single worker barely
+moves away from the warm start on 40 or more tasks: on 40 tasks (seed 1) the
+joint greedy J was not improved by one worker within a deterministic budget of
+40 (about 120 s), while 8 workers reduced the raw objective from 55 092 to 34 882
+in 30 s and to 2 010 in 120 s. The portfolio's large-neighbourhood-search workers
+do most of the improvement. Parallel runs are therefore not bit-for-bit
+reproducible; rolling solves keep one worker and a deterministic budget.
 
 ## Sets and parameters
 
@@ -147,10 +155,21 @@ Frozen robot terminal time, location and SOC form the new depot state.
 
 ## Objective and integer approximation
 
-The physical objective is the simulator's existing objective:
+The objective is the simulator's normalised objective. Each raw term is divided
+by its value $R_k$ in the FCFS schedule of the same instance (with floors
+$f=(1\,\mathrm{s}, 60\,\mathrm{s}, 60\,\mathrm{s}, 1\,\%)$) and weighted equally:
 
-$$\min J=C_{max}+3\sum_i p_iT_i+0.5\left(\sum w_{kr}+\sum w^C_{kq}\right)+2E,$$
+$$\min J=\tfrac14\left(\frac{C_{max}}{\hat R_C}+\frac{\sum_i p_iT_i}{\hat R_T}
++\frac{\sum w_{kr}+\sum w^C_{kq}}{\hat R_W}+\frac{E}{\hat R_E}\right),
+\qquad \hat R_k=\max(R_k,f_k),$$
 $$T_i=\max(0,c_i-d_i),\qquad C_{max}=\max_i c_i.$$
+
+The references are constants computed before the solve, so $J$ stays linear.
+FCFS scores 1 unless one of its terms is below the floor. Without normalisation
+the priority-weighted tardiness (tens of thousands of seconds under load) would
+dominate the energy and waiting terms by orders of magnitude. The rolling
+strategy computes the references once from the full instance; they scale the
+objective but never reveal individual future tasks to a decision.
 
 $E$ counts positive edge, handling and queue consumption, never replenishment.
 `AddMaxEquality` models tardiness and makespan. Optional resource intervals,
