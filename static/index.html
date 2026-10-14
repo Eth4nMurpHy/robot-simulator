@@ -1,79 +1,247 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LoopLab · Robot scheduling studio</title><link rel="stylesheet" href="style.css"></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoopLab</title>
+<link rel="stylesheet" href="style.css">
+</head>
 <body>
-<aside class="sidebar">
-  <a class="brand" href="#"><span class="brand-mark">⌘</span> LoopLab<span class="brand-dot">.</span></a>
-  <div class="workspace-label">SIMULATION WORKSPACE</div>
-  <nav aria-label="Workspace"><button class="nav active" data-tab="simulation"><span>◈</span> Simulation</button><button class="nav" data-tab="tasks"><span>≡</span> Task library <small id="task-badge">40</small></button><button class="nav" data-tab="map-editor"><span>◇</span> Map editor</button><button class="nav" data-tab="strategy-editor"><span>⚙</span> My strategy</button><button class="nav" data-tab="analytics"><span>▥</span> Analytics</button><button class="nav" data-tab="guide"><span>ⓘ</span> Model & guide</button></nav>
-  <div class="sidebar-bottom"><div class="system-status"><i></i> Local simulation engine</div><p>Dual-loop network<br>Intersection + charging scheduler</p><div class="course">EE6228 <span>PROJECT STUDIO</span></div></div>
-</aside>
+<header class="topbar">
+  <span class="brand">LoopLab</span>
+  <nav aria-label="Sections">
+    <button class="nav active" data-tab="simulation">Simulation</button>
+    <button class="nav" data-tab="tasks">Task library <span id="task-badge">40</span></button>
+    <button class="nav" data-tab="map-editor">Map editor</button>
+    <button class="nav" data-tab="strategy-editor">My strategy</button>
+    <button class="nav" data-tab="analytics">Analytics</button>
+    <button class="nav" data-tab="guide">Guide</button>
+  </nav>
+  <button class="link" id="export-all">Export JSON</button>
+</header>
+
 <main>
-<header><div class="breadcrumb">Workspace <span>/</span> <b id="page-name">Simulation</b></div><div class="header-right"><span class="version">DISCRETE-EVENT MODEL</span><span class="avatar">RL</span></div></header>
-<div class="page-heading"><div><div class="eyebrow">PLAN. SIMULATE. UNDERSTAND.</div><h1 id="page-title">A clearer view of every move<span>.</span></h1><p id="page-description">Coordinate deliveries, intersection access, and shared charging in one place.</p></div><button class="button secondary" id="export-all">↓ Export results</button></div>
-<div id="notice" role="status" hidden></div><article id="plan-errors" class="card command-errors" hidden><div class="card-heading"><div><h2>Command plan rejected</h2><p>No commands were queued, retimed, or automatically repaired. Any previous replay still shows its previous valid run.</p></div><button class="button secondary" id="export-errors">↓ Error report JSON</button></div><div class="table-wrap"><table><thead><tr><th>Command</th><th>Time (s)</th><th>Robot</th><th>Error</th><th>Details</th></tr></thead><tbody id="error-rows"></tbody></table></div></article>
+<div id="notice" role="status" hidden></div>
+<section id="plan-errors" class="block errors" hidden>
+  <div class="block-head"><h2>Plan rejected</h2><button class="link" id="export-errors">Error report JSON</button></div>
+  <div class="table-wrap"><table><thead><tr><th>Command</th><th>Time (s)</th><th>Robot</th><th>Error</th><th>Details</th></tr></thead><tbody id="error-rows"></tbody></table></div>
+</section>
+
 <section id="simulation" class="tab-panel">
-  <div class="metrics" id="metrics"><div class="metric"><span>MAKESPAN</span><strong id="m-makespan">—</strong><small>Last delivery completed</small></div><div class="metric"><span>TASKS COMPLETED</span><strong id="m-completed">—</strong><small id="m-late">Run a plan to see results</small></div><div class="metric"><span>AVERAGE RESOURCE WAIT</span><strong id="m-wait">—</strong><small>Intersection + charging, per task</small></div><div class="metric"><span>SAFETY VIOLATIONS</span><strong id="m-safety">—</strong><small id="m-validation">Independent schedule checks</small></div></div>
-  <div class="studio-grid"><div class="visual-column">
-    <article class="card map-card"><div class="card-heading"><div><h2>Live network <span class="pill">2D REPLAY</span></h2><p>Four robots. Two loops. One shared intersection.</p></div><div class="status-pill" id="replay-status"><i></i> Ready to plan</div></div>
-    <div class="map-wrap"><svg id="network" viewBox="90 0 820 470" role="img" aria-label="Dual-loop robot network with shared intersection and chargers">
-      <defs><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#dde5e1"/></pattern><filter id="shadow"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity=".12"/></filter><marker id="arrowA" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0 0 L6 4 L0 8" fill="none" stroke="#28958a" stroke-width="1.5"/></marker><marker id="arrowB" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0 0 L6 4 L0 8" fill="none" stroke="#b49a62" stroke-width="1.5"/></marker></defs>
-      <rect x="90" width="820" height="470" fill="url(#dots)"/>
-      <text x="500" y="18" text-anchor="middle" class="map-section-label">SHARED CHARGING</text>
-      <path d="M500 270 V105 L450 50 M500 105 L550 50" stroke="#ced8d3" stroke-width="16" fill="none" stroke-linejoin="round"/>
-      <path d="M500 270 L365 165 H175 V375 H365 L440 325 Z" stroke="#e0efea" stroke-width="20" fill="none" stroke-linejoin="round"/>
-      <path d="M500 270 L635 375 H825 V165 H635 L560 215 Z" stroke="#f0e9dc" stroke-width="20" fill="none" stroke-linejoin="round"/>
-      <path d="M500 270 L365 165 H175 V375 H365 L440 325 Z" stroke="#67ac9f" stroke-width="2" stroke-dasharray="5 6" fill="none" stroke-linejoin="round"/>
-      <path d="M500 270 L635 375 H825 V165 H635 L560 215 Z" stroke="#b5a07b" stroke-width="2" stroke-dasharray="5 6" fill="none" stroke-linejoin="round"/>
-      <path d="M295 165 H275" marker-end="url(#arrowA)" stroke="#28958a"/><path d="M705 375 H725" marker-end="url(#arrowB)" stroke="#b49a62"/>
-      <text x="275" y="266" text-anchor="middle" class="area-title">ZONE A</text><text x="275" y="288" text-anchor="middle" class="area-subtitle">Delivery loop</text>
-      <text x="725" y="266" text-anchor="middle" class="area-title">ZONE B</text><text x="725" y="288" text-anchor="middle" class="area-subtitle">Delivery loop</text>
-      <circle cx="500" cy="270" r="25" fill="#fff" stroke="#cad9d2" stroke-width="2"/><text x="500" y="275" text-anchor="middle" class="intersection-label">X</text>
-      <g id="edge-length-labels"></g><g id="stations"></g><g id="robot-markers"></g>
-      <text x="500" y="436" text-anchor="middle" class="map-footnote">Fixed, directed routes · resource reservations · battery-aware dispatch</text>
-    </svg><div class="map-legend"><span><i style="background:#147d73"></i> R1</span><span><i style="background:#55a999"></i> R2</span><span><i style="background:#bd8756"></i> R3</span><span><i style="background:#8b79ad"></i> R4</span><span class="legend-last">○ Delivery station</span></div></div>
-    <div class="playback"><button class="play-button" id="play" aria-label="Play replay" disabled>▶</button><button class="step-button" id="step" title="Next event" aria-label="Step to next event" disabled>▸│</button><button class="step-button" id="reset" title="Reset replay" aria-label="Reset replay" disabled>↺</button><span id="clock">00:00</span><input id="scrubber" type="range" min="0" max="100" value="0" step="0.1" aria-label="Simulation time" disabled><span id="duration">00:00</span><select id="speed" aria-label="Replay speed"><option value="10">10×</option><option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option></select></div>
-    </article>
-    <div class="resource-grid"><article class="card compact"><div class="card-heading"><h2>Intersection <span class="resource-code">X</span></h2><span id="cross-state" class="tiny-status">Available</span></div><div id="cross-detail" class="resource-detail">No reservations yet</div><div class="resource-footer" id="cross-next">Safety buffers applied before and after each crossing.</div></article><article class="card compact"><div class="card-heading"><h2>Charging bays</h2><span class="tiny-status" id="bay-count">2 shared bays</span></div><div id="charger-detail" class="bay-list"></div></article></div>
-    <article class="card fleet-card"><div class="card-heading"><h2>Robot fleet</h2><span class="muted">Live state at replay time</span></div><div id="fleet" class="fleet-grid"></div></article>
+  <div class="metrics">
+    <div><span>Makespan</span><strong id="m-makespan">—</strong></div>
+    <div><span>Completed</span><strong id="m-completed">—</strong><small id="m-late"></small></div>
+    <div><span>Average resource wait</span><strong id="m-wait">—</strong></div>
+    <div><span>Violations</span><strong id="m-safety">—</strong><small id="m-validation"></small></div>
   </div>
-  <aside class="card config-card"><div class="card-heading"><div><h2>Configure a run</h2><p>Your experiment, your parameters.</p></div><span class="config-icon">⚙</span></div><form id="run-form">
-    <label for="strategy">Scheduling strategy</label><select id="strategy"><option value="custom" selected>My command plan (JSON)</option><option value="joint">Joint greedy scheduling</option><option value="fcfs">First come, first served</option><option value="deadline">Deadline + reservations</option></select><p class="field-hint" id="strategy-hint">Executes exact robot commands. Conflicts are reported, never queued.</p>
-    <div class="custom-links"><button type="button" class="text-button" id="edit-strategy">Edit / import commands ↗</button><button type="button" class="text-button" id="edit-map">Edit edge lengths ↗</button></div><p class="field-hint" id="map-source">Default map timings</p><div class="form-divider"></div><div class="section-label">TASK DATA <button type="button" class="text-button" id="edit-tasks">Edit tasks ↗</button></div>
-    <div class="field-row"><div><label for="task-count">Task count</label><input id="task-count" type="number" min="1" max="200" value="40" required></div><div><label for="seed">Random seed</label><input id="seed" type="number" min="0" max="4294967295" value="42" required></div></div>
-    <label for="a-share">Zone A task share <output id="share-value">50%</output></label><input id="a-share" type="range" min="0" max="100" value="50"><button type="button" class="button secondary full" id="generate">↻ Generate task list</button><p class="field-hint" id="task-source">40 generated tasks · seed 42</p>
-    <div class="form-divider"></div><div class="section-label">RESOURCE & ENERGY SETTINGS</div>
-    <div class="field-row"><div><label for="chargers">Charging bays</label><select id="chargers"><option value="2">2 bays</option><option value="1">1 bay</option></select></div><div><label for="charge-rate">Charge % / min</label><input id="charge-rate" type="number" min="3" max="8" step="0.5" value="5" required></div></div>
-    <label for="safety">Safety threshold <output id="safety-value">10%</output></label><input id="safety" type="range" min="5" max="30" value="10">
-    <label for="initial-soc">Initial battery <output id="soc-value">65%</output></label><input id="initial-soc" type="range" min="40" max="100" value="65">
-    <details class="advanced"><summary>Advanced parameters</summary><div class="field-row"><div><label for="edge-time">Edge travel (sec)</label><input id="edge-time" type="number" value="20" min="5" max="60" required></div><div><label for="edge-energy">Edge energy (%)</label><input id="edge-energy" type="number" value="2" min="0.1" max="4" step="0.1" required></div></div><div class="field-row"><div><label for="cross-time">Crossing (sec)</label><input id="cross-time" type="number" value="6" min="5" max="8" required></div><div><label for="buffer">Buffer / side (sec)</label><input id="buffer" type="number" value="2" min="1" max="4" required></div></div><label for="wait-drain">Queue drain (% / min)</label><input id="wait-drain" type="number" value="0.2" min="0" max="0.5" step="0.1" required></details>
-    <button type="submit" class="button primary full" id="run">▶ Run simulation</button><p class="run-note">Command plans execute exactly as specified. Replay follows the event log.</p>
-  </form></aside></div>
+
+  <div class="studio">
+    <div class="stage">
+      <div class="block map-block">
+        <svg id="network" viewBox="130 18 740 392" role="img" aria-label="Dual-loop network with shared intersection and chargers">
+          <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0 0 L6 4 L0 8" fill="none" stroke="#9a9a94" stroke-width="1.5"/></marker></defs>
+          <text x="275" y="285" text-anchor="middle" class="loop-letter">A</text>
+          <text x="725" y="285" text-anchor="middle" class="loop-letter">B</text>
+          <path d="M500 270 V105 L450 50 M500 105 L550 50" class="track"/>
+          <path d="M500 270 L365 165 H175 V375 H365 L440 325 Z" class="track"/>
+          <path d="M500 270 L635 375 H825 V165 H635 L560 215 Z" class="track"/>
+          <path d="M295 165 H275" marker-end="url(#arrow)"/><path d="M705 375 H725" marker-end="url(#arrow)"/>
+          <circle cx="500" cy="270" r="18" class="junction"/><text x="500" y="275" text-anchor="middle" class="junction-label">X</text>
+          <g id="edge-length-labels"></g><g id="stations"></g><g id="robot-markers"></g>
+        </svg>
+        <div class="playback">
+          <button class="icon" id="play" aria-label="Play replay" disabled>▶</button>
+          <button class="icon" id="step" title="Next event" aria-label="Step to next event" disabled>⇥</button>
+          <button class="icon" id="reset" title="Reset" aria-label="Reset replay" disabled>↺</button>
+          <span id="clock">00:00</span>
+          <input id="scrubber" type="range" min="0" max="100" value="0" step="0.1" aria-label="Simulation time" disabled>
+          <span id="duration">00:00</span>
+          <select id="speed" aria-label="Replay speed"><option value="10">10×</option><option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option></select>
+          <span id="replay-status" class="status"></span>
+        </div>
+      </div>
+
+      <div class="resources">
+        <div class="block">
+          <div class="block-head"><h3>Intersection</h3><span id="cross-state" class="status">Available</span></div>
+          <p id="cross-detail">—</p>
+          <p id="cross-next" class="muted"></p>
+        </div>
+        <div class="block">
+          <div class="block-head"><h3>Chargers</h3><span id="bay-count" class="status"></span></div>
+          <div id="charger-detail"></div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>Robots</h3>
+        <div id="fleet" class="fleet"></div>
+      </div>
+    </div>
+
+    <form id="run-form" class="block config">
+      <label for="strategy">Strategy</label>
+      <select id="strategy"><option value="custom" selected>My command plan</option><option value="joint">Joint greedy</option><option value="fcfs">FCFS</option><option value="deadline">Deadline + reservations</option></select>
+      <p class="muted" id="map-source"></p>
+
+      <h3>Tasks</h3>
+      <div class="pair">
+        <div><label for="task-count">Count</label><input id="task-count" type="number" min="1" max="200" value="40" required></div>
+        <div><label for="seed">Seed</label><input id="seed" type="number" min="0" max="4294967295" value="42" required></div>
+      </div>
+      <label for="a-share">Loop A share <output id="share-value">50%</output></label>
+      <input id="a-share" type="range" min="0" max="100" value="50">
+      <button type="button" class="button" id="generate">Generate</button>
+      <p class="muted" id="task-source"></p>
+
+      <h3>Battery &amp; charging</h3>
+      <div class="pair">
+        <div><label for="chargers">Bays</label><select id="chargers"><option value="2">2</option><option value="1">1</option></select></div>
+        <div><label for="charge-rate">Rate (%/min)</label><input id="charge-rate" type="number" min="3" max="8" step="0.5" value="5" required></div>
+      </div>
+      <label for="safety">Safety floor <output id="safety-value">10%</output></label>
+      <input id="safety" type="range" min="5" max="30" value="10">
+      <label for="initial-soc">Initial charge <output id="soc-value">65%</output></label>
+      <input id="initial-soc" type="range" min="40" max="100" value="65">
+
+      <details>
+        <summary>Timing</summary>
+        <div class="pair">
+          <div><label for="edge-time">Edge (s)</label><input id="edge-time" type="number" value="20" min="5" max="60" required></div>
+          <div><label for="edge-energy">Edge (%)</label><input id="edge-energy" type="number" value="2" min="0.1" max="4" step="0.1" required></div>
+        </div>
+        <div class="pair">
+          <div><label for="cross-time">Crossing (s)</label><input id="cross-time" type="number" value="6" min="5" max="8" required></div>
+          <div><label for="buffer">Buffer (s)</label><input id="buffer" type="number" value="2" min="1" max="4" required></div>
+        </div>
+        <label for="wait-drain">Queue drain (%/min)</label>
+        <input id="wait-drain" type="number" value="0.2" min="0" max="0.5" step="0.1" required>
+      </details>
+
+      <button type="submit" class="button primary" id="run">Run simulation</button>
+    </form>
+  </div>
 </section>
+
 <section id="tasks" class="tab-panel" hidden>
-  <article class="card"><div class="card-heading"><div><h2>Your task library <span id="library-count" class="pill">40 TASKS</span></h2><p>Times are seconds. Pickup and dropoff must be distinct stations on the same loop.</p></div><div class="button-group"><button class="button secondary" id="import">↑ Import CSV / JSON</button><button class="button secondary" id="export-tasks">↓ Export CSV</button><button class="button primary" id="add-task">+ Add task</button></div></div><input type="file" id="file-input" accept=".csv,.json" hidden><div class="task-toolbar"><label class="search-box">⌕ <input id="task-search" placeholder="Search task ID or station" aria-label="Search tasks"></label><span class="muted">Changes apply on your next simulation run.</span></div><div class="table-wrap"><table id="task-table"><thead><tr><th>Task ID</th><th>Release (s)</th><th>Pickup</th><th>Dropoff</th><th>Load (s)</th><th>Unload (s)</th><th>Due (s)</th><th>Priority</th><th></th></tr></thead><tbody></tbody></table></div><div class="table-footer">CSV fields: task_id, release_time, pickup, dropoff, load_time, unload_time, due_time, priority</div></article>
+  <div class="toolbar">
+    <input id="task-search" type="search" placeholder="Search" aria-label="Search tasks">
+    <span class="spacer"></span>
+    <button class="button" id="import">Import CSV / JSON</button>
+    <button class="button" id="export-tasks">Export CSV</button>
+    <button class="button primary" id="add-task">Add task</button>
+  </div>
+  <input type="file" id="file-input" accept=".csv,.json" hidden>
+  <div class="table-wrap"><table id="task-table" class="dense"><thead><tr><th>ID</th><th>Release (s)</th><th>Pickup</th><th>Dropoff</th><th>Load (s)</th><th>Unload (s)</th><th>Due (s)</th><th>Priority</th><th></th></tr></thead><tbody></tbody></table></div>
 </section>
+
 <section id="map-editor" class="tab-panel" hidden>
-  <div class="editor-heading"><p class="muted">Change directed edge lengths, then apply. Travel seconds = length ÷ speed; energy % = length × consumption per meter. The drawing is schematic, not to scale.</p><div class="button-group"><button class="button secondary" id="import-map">↑ Import map JSON</button><button class="button secondary" id="export-map">↓ Export map JSON</button><button class="button secondary" id="reset-map">Reset defaults</button></div></div>
+  <div class="toolbar">
+    <span id="map-edit-status" class="muted">Defaults</span>
+    <span class="spacer"></span>
+    <button class="button" id="import-map">Import map JSON</button>
+    <button class="button" id="export-map">Export map JSON</button>
+    <button class="button" id="reset-map">Reset defaults</button>
+  </div>
   <input id="map-file" type="file" accept=".json" hidden>
-  <div class="custom-editor-grid"><article class="card"><div class="card-heading"><div><h2>Your network</h2><p>Click an edge length to select it. Each direction can have its own length.</p></div></div><div id="map-preview"></div><div class="table-footer">Fixed dual-loop topology · all 18 directed edges · lengths in meters</div></article>
-  <article class="card"><div class="card-heading"><h2>Travel & energy</h2><span id="map-edit-status" class="muted">Defaults</span></div><form id="map-form" class="editor-form"><div class="field-row"><div><label for="map-speed">Robot speed (m/s)</label><input type="number" id="map-speed" min="0.1" max="10" step="any" required></div><div><label for="map-energy">Energy (% / meter)</label><input type="number" id="map-energy" min="0.001" max="1" step="any" required></div></div><div class="table-wrap edge-table"><table><thead><tr><th>Directed edge</th><th>Length (m)</th><th>Time (s)</th><th>Energy (%)</th></tr></thead><tbody id="edge-rows"></tbody></table></div><button class="button primary full" id="apply-map" type="submit">Apply map to next run</button><button class="button secondary full" id="use-default-map" type="button">Use original global timing settings</button></form></article></div>
-</section>
-<section id="strategy-editor" class="tab-panel" hidden>
-<div class="editor-heading"><p class="muted">Specify when each robot acts. Times are absolute simulation seconds. A busy robot, conflicting resource, or unsafe battery is an error; the simulator never repairs your plan.</p><div class="button-group"><button class="button secondary" id="import-strategy">↑ Import command JSON</button><button class="button secondary" id="export-strategy">↓ Export command JSON</button></div></div><input type="file" id="strategy-file" accept=".json" hidden>
-<div class="custom-editor-grid"><article class="card"><div class="card-heading"><div><h2>Add a robot command</h2><p>You choose the robot, start time, and action.</p></div></div><form id="command-form" class="editor-form"><div class="field-row"><div><label for="cmd-robot">Robot</label><select id="cmd-robot"><option>R1</option><option>R2</option><option>R3</option><option>R4</option></select></div><div><label for="cmd-at">Start time (seconds)</label><input id="cmd-at" type="number" min="0" max="1000000" step="any" value="0" required></div></div><label for="cmd-action">Action</label><select id="cmd-action"><option value="execute_task">Execute a task</option><option value="move_to">Move to a node</option><option value="charge">Go to a bay and charge</option><option value="wait">Wait</option></select><div id="cmd-task-field"><label for="cmd-task">Task ID</label><input id="cmd-task" placeholder="T001" maxlength="64"></div><div id="cmd-node-field" hidden><label for="cmd-node">Destination node</label><select id="cmd-node"></select></div><div id="cmd-charge-field" hidden><div class="field-row"><div><label for="cmd-bay">Charging bay</label><select id="cmd-bay"><option>C1</option><option>C2</option></select></div><div><label for="cmd-target">Target SOC (%)</label><input id="cmd-target" type="number" min="1" max="100" step="any" value="90"></div></div></div><div id="cmd-wait-field" hidden><label for="cmd-duration">Wait duration (seconds)</label><input id="cmd-duration" type="number" min="0.001" max="86400" step="any" value="30"></div><button class="button primary full" id="add-command" type="submit">+ Add command</button><button class="button secondary full" id="cancel-command" type="button" hidden>Cancel editing</button></form></article>
-<article class="card"><div class="card-heading"><div><h2>Command plan JSON</h2><p>Import output from your own planner, or edit commands directly.</p></div></div><div class="editor-form"><label for="rule-name">Plan name</label><input id="rule-name" maxlength="64" value="My commands"><textarea id="strategy-json" spellcheck="false" aria-label="Robot command plan JSON" rows="16"></textarea><button id="apply-strategy-json" class="button primary full">Apply & select command plan</button><div class="guide-callout"><b>The simulator executes; it does not decide.</b>Execute-task commands follow the fixed route to pickup and delivery. Charge commands travel to your chosen bay and remain there after charging until you command departure. There is no automatic charging, waiting for resource conflicts, or task reassignment.</div></div></article></div>
-<article class="card"><div class="card-heading"><h2>Your command timeline <span class="pill" id="command-count">0 COMMANDS</span></h2><span class="muted">Edit or delete a row, then apply the plan.</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Start (s)</th><th>Robot</th><th>Action</th><th>Parameters</th><th></th></tr></thead><tbody id="command-rows"></tbody></table></div></article>
-</section>
-<section id="analytics" class="tab-panel" hidden>
-  <div id="analytics-empty" class="empty-state"><span>▥</span><h2>Every run tells a story.</h2><p>Run a simulation to inspect schedules, energy, and performance.</p><button class="button primary" id="back-to-simulation">Configure a run →</button></div>
-  <div id="analytics-content" hidden><div class="analysis-top"><div class="validation-tag" id="validation-report"></div><button class="button secondary" id="export-summary">↓ Summary CSV</button><button class="button secondary" id="export-schedule">↓ Schedule CSV</button><button class="button secondary" id="export-events">↓ Event log CSV</button></div>
-    <article class="card chart-card"><div class="card-heading"><div><h2>Robot activity timeline</h2><p>Every movement, resource wait, delivery, and charging session.</p></div><div class="chart-legend"><span class="move">Move</span><span class="handle">Handling</span><span class="wait">Wait</span><span class="charge">Charge</span></div></div><div id="gantt" class="chart"></div></article>
-    <div class="analysis-grid"><article class="card chart-card"><div class="card-heading"><div><h2>Battery over time</h2><p>State of charge (%) · dashed line marks the safety floor</p></div></div><div id="battery-chart" class="chart"></div></article><article class="card chart-card"><div class="card-heading"><div><h2>Shared resource reservations</h2><p>Exclusive access to intersection and charging bays.</p></div></div><div id="resource-chart" class="chart"></div></article></div>
-    <article class="card"><div class="card-heading"><div><h2>Strategy comparison</h2><p>Identical tasks and settings. Lower makespan and lateness are better.</p></div><button class="button primary" id="compare">Compare all strategies</button></div><div id="comparison" class="comparison-empty">Compare the automatic example schedulers. Command plans are checked and replayed separately.</div></article>
-    <article class="card" id="unexecuted-card" hidden><div class="card-heading"><div><h2>Tasks without execution commands</h2><p id="unexecuted-list"></p></div></div></article><article class="card deliveries-card"><div class="card-heading"><h2>Delivery outcomes</h2><span class="muted" id="delivery-summary"></span></div><div class="table-wrap"><table><thead><tr><th>Task</th><th>Robot</th><th>Route</th><th>Released</th><th>Completed</th><th>Due</th><th>Lateness</th></tr></thead><tbody id="delivery-rows"></tbody></table></div></article>
+  <div class="split">
+    <div class="block"><div id="map-preview"></div></div>
+    <form id="map-form" class="block">
+      <div class="pair">
+        <div><label for="map-speed">Speed (m/s)</label><input type="number" id="map-speed" min="0.1" max="10" step="any" required></div>
+        <div><label for="map-energy">Energy (%/m)</label><input type="number" id="map-energy" min="0.001" max="1" step="any" required></div>
+      </div>
+      <div class="table-wrap edge-table"><table class="dense"><thead><tr><th>Edge</th><th>Length (m)</th><th>Time (s)</th><th>Energy (%)</th></tr></thead><tbody id="edge-rows"></tbody></table></div>
+      <div class="actions">
+        <button class="button primary" id="apply-map" type="submit">Apply map to next run</button>
+        <button class="button" id="use-default-map" type="button">Use original global timing settings</button>
+      </div>
+    </form>
   </div>
 </section>
-<section id="guide" class="tab-panel" hidden><article class="card guide"><div class="eyebrow">HOW THE MODEL WORKS</div><h2>A scheduling sandbox, with explicit assumptions.</h2><p>Use Map editor to change edge lengths and My strategy to edit or import explicit robot commands. For command plans, the engine reports resource conflicts instead of delaying commands. Automatic examples reserve resources themselves. This simulator implements the minimum deliverable described in your EE6228 dual-loop proposal. It models four robots, one exclusive intersection, one or two shared charging bays, task deadlines, and event-based battery consumption.</p><div class="guide-grid"><div><h3>01 · Load your tasks</h3><p>Generate a reproducible list or import CSV/JSON. All time fields are in seconds and battery levels are percentages. R1/R2 serve A stations; R3/R4 serve B stations. Cross-zone deliveries are rejected.</p><h3>02 · Choose a scheduling rule</h3><p><b>FCFS:</b> considers tasks by release time and assigns the compatible robot with the earliest predicted completion. Charges below 20%, or sooner for safety.</p><p><b>Deadline:</b> considers earliest deadlines first, using priority as a tie-breaker. It reserves intersection and charging access while planning each task.</p><p><b>Joint greedy:</b> evaluates the next eight tasks and both compatible robots together. Score = completion seconds + 3 × priority × lateness seconds + 0.5 × resource wait seconds + 2 × energy percentage points. This is a heuristic, not CP-SAT or a global optimum.</p></div><div><h3>03 · Understand energy & safety</h3><p>Ordinary edges use global defaults, or your edited map’s lengths, speed, and energy per meter. Crossing edges use the crossing duration and proportional energy. Loading and unloading each consume 0.5%. Queueing consumes energy; powered-down idle between jobs consumes none. Charging restores battery to 95% at a constant rate.</p><p>In command mode, you assign tasks and request charging explicitly. Commands start at exactly their requested times; busy robots, overlapping intersection/charger use, and low battery reject the plan. Uncommanded tasks remain unexecuted.</p><p>For automatic examples only: before assigning a task, the planner checks enough battery remains to finish it, reach a charger, and wait for a reserved bay. It additionally retains conservative queue headroom for three other robots each needing a full recharge; this can cause earlier charging. If needed, it charges first. Infeasible inputs are reported rather than silently allowing low battery.</p><h3>04 · Read the output</h3><p>Makespan is the final delivery time. Average wait is total intersection and charging queue time divided by task count. Energy is cumulative consumption in battery percentage points across all robots. Utilization is occupied resource time divided by makespan (and bay count for charging).</p><p>Reservations include a safety gap of twice the per-side buffer between crossings. Ordinary loop edges are not exclusive: this model checks resource conflicts, not continuous geometry, rear-end collisions, or physical traffic dynamics.</p></div></div><div class="guide-callout"><b>Replay is evidence, not a second simulation.</b> All robot positions, battery curves, resource states, schedules, and exports come from the same action log. Uploaded tasks stay in your browser and this local server; they are not sent to an external service.</div><p class="muted">Not included: global CP-SAT optimization, live dynamic order injection, nonlinear charging, vehicle kinematics, or repeated-seed statistical experiments. Strategy improvements are workload-dependent.</p></article></section>
-<footer><span>LoopLab / Robot scheduling studio</span><span>Built for exploration. Grounded in event data.</span></footer>
-</main><script src="app.js"></script></body></html>
+
+<section id="strategy-editor" class="tab-panel" hidden>
+  <div class="toolbar">
+    <input id="rule-name" maxlength="64" value="My commands" aria-label="Plan name">
+    <span class="spacer"></span>
+    <button class="button" id="import-strategy">Import command JSON</button>
+    <button class="button" id="export-strategy">Export command JSON</button>
+    <button class="button primary" id="apply-strategy-json">Apply &amp; select command plan</button>
+  </div>
+  <input type="file" id="strategy-file" accept=".json" hidden>
+  <div class="split">
+    <div>
+      <form id="command-form" class="block command-form">
+        <div><label for="cmd-robot">Robot</label><select id="cmd-robot"><option>R1</option><option>R2</option><option>R3</option><option>R4</option></select></div>
+        <div><label for="cmd-at">At (s)</label><input id="cmd-at" type="number" min="0" max="1000000" step="any" value="0" required></div>
+        <div><label for="cmd-action">Action</label><select id="cmd-action"><option value="execute_task">Execute task</option><option value="move_to">Move to</option><option value="charge">Charge</option><option value="wait">Wait</option></select></div>
+        <div id="cmd-task-field"><label for="cmd-task">Task</label><input id="cmd-task" placeholder="T001" maxlength="64"></div>
+        <div id="cmd-node-field" hidden><label for="cmd-node">Node</label><select id="cmd-node"></select></div>
+        <div id="cmd-charge-field" class="pair" hidden>
+          <div><label for="cmd-bay">Bay</label><select id="cmd-bay"><option>C1</option><option>C2</option></select></div>
+          <div><label for="cmd-target">Target (%)</label><input id="cmd-target" type="number" min="1" max="100" step="any" value="90"></div>
+        </div>
+        <div id="cmd-wait-field" hidden><label for="cmd-duration">Duration (s)</label><input id="cmd-duration" type="number" min="0.001" max="86400" step="any" value="30"></div>
+        <div class="actions">
+          <button class="button primary" id="add-command" type="submit">Add</button>
+          <button class="button" id="cancel-command" type="button" hidden>Cancel</button>
+        </div>
+      </form>
+      <div class="block">
+        <div class="block-head"><h3>Command timeline</h3><span id="command-count" class="muted"></span></div>
+        <div class="table-wrap"><table class="dense"><thead><tr><th>#</th><th>At (s)</th><th>Robot</th><th>Action</th><th>Target</th><th></th></tr></thead><tbody id="command-rows"></tbody></table></div>
+      </div>
+    </div>
+    <div class="block"><textarea id="strategy-json" spellcheck="false" aria-label="Command plan JSON" rows="24"></textarea></div>
+  </div>
+</section>
+
+<section id="analytics" class="tab-panel" hidden>
+  <p id="analytics-empty" class="empty">No run yet.</p>
+  <div id="analytics-content" hidden>
+    <div class="toolbar">
+      <span id="validation-report" class="muted"></span>
+      <span class="spacer"></span>
+      <button class="button" id="export-summary">Summary CSV</button>
+      <button class="button" id="export-schedule">Schedule CSV</button>
+      <button class="button" id="export-events">Events CSV</button>
+    </div>
+    <div class="block">
+      <div class="block-head"><h3>Robot activity</h3><div class="legend"><span class="move">Move</span><span class="handle">Load/unload</span><span class="wait">Wait</span><span class="charge">Charge</span></div></div>
+      <div id="gantt" class="chart"></div>
+    </div>
+    <div class="split even">
+      <div class="block"><h3>Battery over time (%)</h3><div id="battery-chart" class="chart"></div></div>
+      <div class="block"><h3>Shared resource reservations</h3><div id="resource-chart" class="chart"></div></div>
+    </div>
+    <div class="block">
+      <div class="block-head"><h3>Strategy comparison</h3><button class="button" id="compare">Compare strategies</button></div>
+      <div id="comparison"></div>
+    </div>
+    <div class="block" id="unexecuted-card" hidden><h3>Unexecuted tasks</h3><p id="unexecuted-list"></p></div>
+    <div class="block">
+      <div class="block-head"><h3>Delivery outcomes</h3><span class="muted" id="delivery-summary"></span></div>
+      <div class="table-wrap"><table class="dense"><thead><tr><th>Task</th><th>Robot</th><th>Route</th><th>Released</th><th>Completed</th><th>Due</th><th>Late by</th></tr></thead><tbody id="delivery-rows"></tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<section id="guide" class="tab-panel prose" hidden>
+  <h2>Model</h2>
+  <p>Two loops share one intersection X. R1 and R2 serve stations A1–A4, R3 and R4 serve B1–B4; each carries one task at a time. Charging bays C1 and C2 hang off X through H. Only one robot may be inside X at a time, with a buffer on each side, and only one robot per bay.</p>
+  <p>Times are in seconds, battery in percentage points. Loading and unloading cost 0.5% each. Waiting in a queue drains the battery; idling between jobs does not.</p>
+
+  <h2>Command plans</h2>
+  <p>Write or import plans under <b>My strategy</b>; edge lengths are changed in <b>Map editor</b>. A plan is a list of <code>{robot_id, at, action, …}</code> entries. Actions are <code>execute_task</code>, <code>move_to</code>, <code>charge</code> and <code>wait</code>. They run exactly as written: a busy robot, an overlapping booking or an unsafe battery level rejects the whole plan. Nothing is rescheduled or charged automatically, and tasks without a command stay unexecuted.</p>
+
+  <h2>Built-in schedulers</h2>
+  <p><b>FCFS</b> takes tasks in release order and picks the robot that would finish first. <b>Deadline</b> takes the earliest due date first, priority breaking ties. <b>Joint greedy</b> looks at the next eight tasks and minimises completion + 3·priority·lateness + 0.5·wait + 2·energy. All three are heuristics; they charge to 95% when the battery gets low.</p>
+
+  <h2>Metrics</h2>
+  <p>Makespan is the last delivery (for command plans, the end of the last command). Average wait is intersection plus charger queueing per task. Utilisation is busy time over makespan.</p>
+  <p>Loop edges are not exclusive, so this is a resource model, not a collision model. There is no global optimisation, nonlinear charging or live order injection.</p>
+</section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
