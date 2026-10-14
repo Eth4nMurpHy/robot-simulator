@@ -226,7 +226,7 @@ def execute_commands(tasks, config, world, data):
     occupied = lambda resource: sum(a['end_time'] - a['start_time'] for a in reservations[resource])
     result = dict(mode='commands', strategy='custom', strategy_label=definition['name'], config=asdict(cfg),
                   nodes=NODES, map=plan.world, custom_strategy=definition, commands=command_results,
-                  robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f'{r["loop"]}1', initial_soc=cfg.initial_soc) for r in plan.robots],
+                  robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f'{r["loop"]}1', initial_soc=cfg.start_soc(i)) for i, r in enumerate(plan.robots)],
                   tasks=sorted(completed, key=lambda t: (t['release_time'], t['task_id'])), actions=actions,
                   unexecuted_tasks=[t['task_id'] for t in tasks if t['task_id'] not in assigned],
                   reservations={k: sorted(v, key=lambda a: a['start_time']) for k, v in reservations.items()})
@@ -243,7 +243,7 @@ def execute_commands(tasks, config, world, data):
         completed=len(completed), total_tasks=total, unexecuted=total-len(completed), late_tasks=late,
         tardiness_rate=late/max(1,len(completed)), total_tardiness=sum(t['tardiness'] for t in completed),
         cross_wait=0, charge_wait=0, average_wait=0, energy=sum(max(0,a['energy']) for a in actions),
-        distance_m=sum(a['distance_m'] for a in actions), min_soc=min([a['end_soc'] for a in actions]+[cfg.initial_soc]),
+        distance_m=sum(a['distance_m'] for a in actions), min_soc=min([a['end_soc'] for a in actions]+[cfg.start_soc(i) for i in range(4)]),
         violations=0, cross_utilization=occupied('X')/max(1,horizon),
         charge_utilization=sum(occupied(b) for b in bays)/(max(1,horizon)*cfg.chargers),
         charging_sessions=sum(a['action']=='charge' for a in actions), runtime=time.perf_counter()-started)

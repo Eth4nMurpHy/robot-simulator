@@ -1,0 +1,4 @@
+# Optional: only the CP-SAT/rolling optimizers and experiments.py need these.
+# The web app and baseline heuristics run on the standard library alone.
+ortools>=9.15
+matplotlib>=3.9

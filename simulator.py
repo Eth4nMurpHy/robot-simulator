@@ -11,6 +11,9 @@ NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
          'B1': [635, 375], 'B2': [825, 375], 'B3': [825, 165],
          'B4': [635, 165], 'WB': [560, 215], 'H': [500, 105],
          'C1': [450, 50], 'C2': [550, 50]}
+# Weights of the report objective J = Cmax + 3*sum(priority_i*T_i) + 0.5*(W_cross + W_charge) + 2*E.
+# Battery safety is a hard constraint enforced by the validator, never a weighted term.
+OBJECTIVE_WEIGHTS = {'makespan': 1, 'tardiness': 3, 'wait': .5, 'energy': 2}
 STRATEGIES = {'fcfs': 'First come, first served', 'deadline': 'Deadline + reservations',
               'joint': 'Joint greedy scheduling'}
 
@@ -28,6 +31,10 @@ class Config:
     crossing_seconds: float = 6
     buffer_seconds: float = 2
     charge_target: float = 95
+    robot_soc: list | None = None  # optional per-robot initial SOC for R1-R4; overrides initial_soc
+
+    def start_soc(self, index):
+        return self.robot_soc[index] if self.robot_soc else self.initial_soc
 
     @classmethod
     def parse(cls, data):
@@ -38,10 +45,15 @@ class Config:
                   'wait_energy_per_min': (0, .5), 'handling_energy': (0, 1),
                   'charge_per_min': (3, 8), 'crossing_seconds': (5, 8),
                   'buffer_seconds': (1, 4), 'charge_target': (80, 100)}
-        unknown = set(data) - set(bounds)
+        unknown = set(data) - set(bounds) - {'robot_soc'}
         if unknown:
             raise InputError('Unknown config fields: ' + ', '.join(sorted(unknown)))
-        kwargs = {k: number(v, k, *bounds[k]) for k, v in data.items()}
+        kwargs = {k: number(v, k, *bounds[k]) for k, v in data.items() if k != 'robot_soc'}
+        if data.get('robot_soc') is not None:
+            socs = data['robot_soc']
+            if not isinstance(socs, list) or len(socs) != 4:
+                raise InputError('robot_soc must list four initial SOC values for R1-R4.')
+            kwargs['robot_soc'] = [number(v, f'robot_soc[{i}]', 40, 100) for i, v in enumerate(socs)]
         if 'chargers' in kwargs:
             if kwargs['chargers'] != int(kwargs['chargers']):
                 raise InputError('chargers must be 1 or 2.')
@@ -99,6 +111,19 @@ def generate_tasks(count=40, seed=42, a_share=.5):
     return sorted(tasks, key=lambda t: (t['release_time'], t['task_id']))
 
 
+def objective(tasks, makespan, waits, energy, weights=OBJECTIVE_WEIGHTS):
+    """Scalar objective J used to compare every strategy, including the optimizers."""
+    return (weights['makespan'] * makespan + weights['wait'] * waits + weights['energy'] * energy
+            + weights['tardiness'] * sum(t['priority'] * t['tardiness'] for t in tasks))
+
+
+def random_robot_soc(seed=42, low=50, high=100):
+    """Reproducible per-robot initial SOC, independent of the task stream for the same seed."""
+    seed = number(seed, 'seed', 0, 2**32 - 1)
+    rng = random.Random(f'soc-{int(seed)}')
+    return [round(rng.uniform(low, high), 1) for _ in range(4)]
+
+
 def slot(calendar, earliest, duration, gap=0):
     t = earliest
     for reservation in sorted(calendar, key=lambda x: x['start_time']):
@@ -116,7 +141,7 @@ class Planner:
         self.world = parse_map(world, config)
         self.rules = rules
         self.robots = [dict(robot_id=f'R{i + 1}', loop=area, node=f'{area}1',
-                            time=0., soc=config.initial_soc) for i, area in enumerate('AABB')]
+                            time=0., soc=config.start_soc(i)) for i, area in enumerate('AABB')]
         self.calendars = {'X': [], **{f'C{i + 1}': [] for i in range(config.chargers)}}
         self.actions = []
         self.results = []
@@ -291,7 +316,7 @@ def validate_result(result):
             errors.append(f'{resource}: overlapping reservations')
     for robot in result['robots']:
         actions = sorted([a for a in result['actions'] if a['robot_id'] == robot['robot_id']], key=lambda a: a['start_time'])
-        last_end, soc, node = 0., cfg['initial_soc'], robot['start_node']
+        last_end, soc, node = 0., robot['initial_soc'], robot['start_node']
         for index, a in enumerate(actions):
             if a['start_time'] < last_end - 1e-8 or a['end_time'] < a['start_time']:
                 errors.append(f"{robot['robot_id']}: overlapping/reversed actions")
@@ -411,7 +436,7 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
     occupied = lambda key: sum(a['end_time'] - a['start_time'] for a in plan.calendars[key])
     result = dict(strategy=strategy, strategy_label=rules['name'] if rules else STRATEGIES[strategy], config=asdict(cfg), nodes=NODES,
                   map=plan.world, custom_strategy=rules,
-                  robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f"{r['loop']}1", initial_soc=cfg.initial_soc) for r in plan.robots],
+                  robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f"{r['loop']}1", initial_soc=cfg.start_soc(i)) for i, r in enumerate(plan.robots)],
                   tasks=sorted(plan.results, key=lambda t: (t['release_time'], t['task_id'])), actions=actions,
                   reservations={k: sorted(v, key=lambda a: a['start_time']) for k, v in plan.calendars.items()})
     events = []
@@ -435,6 +460,7 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
         cross_utilization=occupied('X') / makespan,
         charge_utilization=sum(occupied(f'C{i + 1}') for i in range(cfg.chargers)) / (makespan * cfg.chargers),
         charging_sessions=sum(a['action'] == 'charge' for a in actions), runtime=time.perf_counter() - started)
+    result['summary']['objective'] = objective(plan.results, makespan, cross_wait + charge_wait, result['summary']['energy'])
     if errors:
         raise RuntimeError('Schedule validation failed: ' + '; '.join(errors))
     return result
