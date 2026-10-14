@@ -167,9 +167,10 @@ $$T_i=\max(0,c_i-d_i),\qquad C_{max}=\max_i c_i.$$
 The references are constants computed before the solve, so $J$ stays linear.
 FCFS scores 1 unless one of its terms is below the floor. Without normalisation
 the priority-weighted tardiness (tens of thousands of seconds under load) would
-dominate the energy and waiting terms by orders of magnitude. The rolling
-strategy computes the references once from the full instance; they scale the
-objective but never reveal individual future tasks to a decision.
+dominate the energy and waiting terms by orders of magnitude. Rolling re-plans
+use online references: FCFS on the tasks known at that epoch, continued from the
+current partial plan, so no coefficient depends on unreleased tasks. Only the
+final, retrospective score uses the full-instance references.
 
 $E$ counts positive edge, handling and queue consumption, never replenishment.
 `AddMaxEquality` models tardiness and makespan. Optional resource intervals,
@@ -200,11 +201,12 @@ integer. Small bound/optimality tolerances from objective scaling should not be
 interpreted as a continuous-time proof. `OPTIMAL` means optimal for the finite
 charge-slot, finite-horizon integer model. It is not a global proof for unlimited
 charging or arbitrary continuous times. The tiny test family separately proves
-physical lower bounds: every delivery costs at least 50 seconds and 3 SOC;
-four balanced tasks attain $50+2(12)=74$, five attain $100+2(15)=130$, and six
-attain $100+2(18)=136$. With three tasks on a loop, one of its two robots must
-perform two deliveries. The constructed chains attain these bounds without
-extra travel, charging, waiting or tardiness.
+physical lower bounds: every delivery costs at least 50 seconds and 3 SOC, so
+four balanced tasks need $C_{max}\geq50$ and five or six need $C_{max}\geq100$
+(with three tasks on a loop, one of its two robots performs two deliveries),
+and $E\geq3n$. The constructed chains attain both bounds without extra travel,
+charging, waiting or tardiness, so they are optimal for any positive weights; the
+tests check these raw terms and that the proven bound equals the objective.
 
 ## Warm start, decoding and result metadata
 

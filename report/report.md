@@ -194,9 +194,11 @@ while orders remain:
 
 Committed actions are never revised. Each window solve additionally requires the last planned job
 of every robot to leave enough energy to reach a charger even if the bays are busy, so that the next
-window is never left in an energy dead end. The FCFS references used to normalise $J$ are computed
-once from the full instance; they only scale the objective and never expose an individual future
-order to a decision.
+window is never left in an energy dead end. Even the normalisation is online: at each re-plan the
+references come from an FCFS schedule of only the orders known so far, continued from the robots'
+current state. (An earlier version used full-instance references; the review showed that this
+changed decisions, i.e. it leaked future information.) The final schedule is scored with the
+full-instance $J$ like every other strategy.
 
 ## 5. Experiments
 

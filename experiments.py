@@ -158,6 +158,8 @@ def main():
     parser.add_argument('--workers', type=int, default=min(8, os.cpu_count() or 1), help='CP-SAT workers (offline)')
     parser.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2), help='parallel heuristic/rolling runs')
     parser.add_argument('--out', default='results')
+    parser.add_argument('--reuse', help='runs.csv of an earlier run: reuse its rows for --reuse-strategies')
+    parser.add_argument('--reuse-strategies', nargs='+', default=['cpsat'])
     args = parser.parse_args()
     unknown = set(args.strategies) - {*STRATEGIES, *OPTIMIZERS}
     if unknown:
@@ -171,17 +173,28 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     done = {}
+    if args.reuse:
+        # Keys must match this run's settings; rows of other strategies are recomputed.
+        labels = {(e, label): tuple(sorted(setting.items())) for e, label, setting in groups}
+        with open(args.reuse, newline='') as f:
+            for row in csv.DictReader(f):
+                key = (labels.get((row['experiment'], row['setting'])), row['strategy'], int(row['seed']))
+                if key[0] and row['strategy'] in args.reuse_strategies and key in set(unique):
+                    numeric = {k: float(v) for k, v in row.items() if k not in ('experiment', 'setting', 'strategy', 'status', 'message', 'solver_status') and v != ''}
+                    done[key] = {k: v for k, v in row.items() if k not in ('experiment', 'setting', 'j_vs_fcfs')} | numeric
+                    done[key]['seed'] = int(row['seed'])
+        print(f'Reusing {len(done)} rows from {args.reuse}.')
 
     def record(key, row):
         done[key] = row
         print(f"[{len(done)}/{len(unique)}] {dict(key[0])} {row['strategy']:<9} seed {row['seed']:<3} "
               + (f"J={row['objective']:.3f} ({row['runtime']:.1f}s)" if row['status'] == 'ok' else 'FAILED ' + row['message']), flush=True)
 
-    light = [k for k in unique if k[1] != 'cpsat']
+    light = [k for k in unique if k[1] != 'cpsat' and k not in done]
     with ProcessPoolExecutor(args.jobs) as pool:
         for key, row in zip(light, pool.map(run, [(*k, options) for k in light])):
             record(key, row)
-    for key in (k for k in unique if k[1] == 'cpsat'):  # one at a time: CP-SAT uses its own workers
+    for key in (k for k in unique if k[1] == 'cpsat' and k not in done):  # one at a time: CP-SAT uses its own workers
         record(key, run((*key, options)))
     rows = [dict(experiment=e, setting=label, **done[(tuple(sorted(setting.items())), s, seed)])
             for e, label, setting in groups for seed in seeds for s in args.strategies]

@@ -176,6 +176,43 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(norm['coefficients']['tardiness'], .25 / 60)
         self.assertAlmostEqual(objective(dict(makespan=50, tardiness=0, wait=0, energy=3), norm), .5)
 
+    def test_validator_rejects_tampered_traces(self):
+        result = simulate([simple_task(pickup='A4', dropoff='A1'), simple_task(task_id='two', pickup='B4', dropoff='B1')], strategy='fcfs')
+        self.assertEqual(validate_result(result), [])
+        # A crossing booked under a bay label must still count as physical use of X.
+        relabel = copy.deepcopy(result)
+        cross = next(a for a in relabel['actions'] if a['action'] == 'cross' and a['robot_id'] == 'R3')
+        cross['resource'] = 'C1'
+        self.assertIn('R3: invalid crossing', validate_result(relabel))
+        # Executing before release while keeping the task record's start time.
+        early = copy.deepcopy(simulate([simple_task(release_time=100)], strategy='fcfs'))
+        early['actions'] = [a for a in early['actions'] if a['action'] != 'idle']
+        for a in early['actions']:
+            a['start_time'] -= 100
+            a['end_time'] -= 100
+        self.assertIn('one: precedence/release violation', validate_result(early))
+        forged = copy.deepcopy(result)
+        forged['tasks'][0]['completion_time'] -= 10
+        self.assertIn(f"{forged['tasks'][0]['task_id']}: completion/tardiness does not match the action trace", validate_result(forged))
+        teleport = copy.deepcopy(result)
+        last = max((a for a in teleport['actions'] if a['robot_id'] == 'R2'), key=lambda a: a['end_time'], default=None)
+        teleport['actions'].append(dict(robot_id='R2', task_id='', action='idle', node='A4', from_node='A1', to_node='A4',
+                                        start_time=0, end_time=10, start_soc=65, end_soc=65, energy=0, resource='', distance_m=0))
+        self.assertIsNone(last)
+        self.assertIn('R2: stationary action moves the robot or stops in X', validate_result(teleport))
+        lying = copy.deepcopy(result)
+        lying['robots'][0]['initial_soc'] = 90
+        self.assertIn('R1: initial SOC does not match the configuration', validate_result(lying))
+
+    def test_min_soc_counts_idle_robots(self):
+        result = simulate([simple_task()], {'robot_soc': [100, 40, 40, 40]}, 'fcfs')
+        self.assertEqual(result['summary']['min_soc'], 40)
+
+    def test_generator_rejects_release_window_beyond_schema(self):
+        with self.assertRaises(InputError):
+            generate_tasks(200, 42, release_gap=600)
+        validate_tasks(generate_tasks(144, 42, release_gap=600))
+
 
 if __name__ == '__main__':
     unittest.main()

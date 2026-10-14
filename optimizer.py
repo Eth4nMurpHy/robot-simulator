@@ -511,7 +511,10 @@ def rolling_plan(base, tasks, opts):
             work[area] += estimate
         frozen = {resource: [dict(a) for a in calendar if a['end_time'] >= tick]
                   for resource, calendar in base.calendars.items()}
-        candidate, info = solve(base, window, opts, rolling=True)
+        # Online decisions are normalised with FCFS on the known tasks only (no future information);
+        # the full-instance reference in opts['norm'] is used solely for the final evaluation.
+        online = dict(opts, norm=normaliser(known, base.c, start=base))
+        candidate, info = solve(base, window, online, rolling=True)
         jobs = jobs_from_plan(candidate, base)
         committed, actions, commitments = [], [], []
         for k, robot_jobs in enumerate(jobs):

@@ -123,6 +123,19 @@ class OptimizerTests(unittest.TestCase):
         solver.parameters.fix_variables_to_their_hinted_value = True
         self.assertEqual(solver.solve(model.model),cp_model.OPTIMAL)
 
+    def test_rolling_decisions_ignore_unreleased_tasks(self):
+        # Review regression: full-instance normalisation once changed early commitments
+        # when orders released later were added.
+        base = generate_tasks(5, 1, a_share=1)
+        for task in base:
+            task.update(release_time=0, due_time=100 + task['due_time'] % 200)
+        later = [dict(task_id=f'F{i}', release_time=600, pickup='A4', dropoff='A1', load_time=10,
+                      unload_time=10, due_time=600, priority=5) for i in range(5)]
+        options = dict(workers=1, time_limit=5, deterministic_time=.2)
+        early = lambda tasks: [(h['replan_time'], h['committed_tasks']) for h in
+                               simulate(tasks, {}, 'rolling', None, options)['solver']['replans'] if h['replan_time'] < 600]
+        self.assertEqual(early(base), early(base + later))
+
     def test_rolling_release_audit_and_frozen_reservations(self):
         tasks = generate_tasks(40,2)
         release = {t['task_id']:t['release_time'] for t in tasks}
