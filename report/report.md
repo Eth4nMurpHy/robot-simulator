@@ -208,7 +208,7 @@ full-instance $J$ like every other strategy.
 ### 5.1 Setup
 
 The experiment plan of the proposal is run by `experiments.py`. Every configuration uses seeds 1–10;
-for a given seed all six strategies receive the identical order list, configuration and seeded
+for a given seed all seven strategies (six plus the ablation of Section 6.2) receive the identical order list, configuration and seeded
 initial SOC (50–100 % per robot), and the base setting is 40 orders, 2 bays, a 10 % safety threshold,
 a 1:1 zone split and no urgent orders. One factor is varied per experiment:
 
@@ -222,7 +222,7 @@ a 1:1 zone split and no urgent orders. One factor is varied per experiment:
 | Dynamic orders | +0, +10, +20 % urgent orders (due 3–6 min after release, priority 4–5) |
 
 Identical instances that occur in several experiments (the base setting) are solved once, giving
-10 distinct settings × 10 seeds × 6 strategies = 600 runs. Each run reports $J$, its four raw terms,
+10 distinct settings × 10 seeds × 7 strategies = 700 runs. Each run reports $J$, its four raw terms,
 the late-order rate, queueing at X and at the chargers, energy, charging sessions and runtime. Because
 the seeds differ strongly in difficulty, the tables also give the **paired** change of $J$ against
 FCFS on the same instance.
@@ -242,10 +242,168 @@ drained the batteries to the safety floor at the end and frequently skipped char
 charging at all on any 20-order instance), which inflated its advantage; Section 6 quantifies this.
 The heuristics also always charge to 95 %, whereas CP-SAT chooses the amount.
 
+### 5.2 Algorithm comparison (base setting)
+
+40 orders, 2 bays, 10 % threshold, 1:1 zones; mean over 10 seeds; paired change of $J$ against FCFS
+as mean / median. Full tables: `results/results.md`; every run: `results/runs.csv`.
+
+| Strategy | $J$ | vs FCFS | Late orders | Tardiness (s) | Makespan (s) | Charges | Energy (%) | Runtime |
+|---|---|---|---|---|---|---|---|---|
+| FCFS | 1.000 | — | 52 % | 26 028 | 3 233 | 5.0 | 443 | < 0.1 s |
+| Staged | 1.067 | +7 % / +2 % | 51 % | 27 264 | 3 441 | 5.4 | 449 | < 0.1 s |
+| Deadline + reservations | 1.003 | 0 % / −4 % | 51 % | 25 994 | 3 210 | 4.9 | 438 | < 0.1 s |
+| Joint greedy | 0.793 | −21 % / −23 % | 37 % | 17 826 | 3 021 | 3.9 | 386 | 0.3 s |
+| Rolling CP-SAT (online) | 0.636 | −36 % / −37 % | 37 % | 15 651 | 2 741 | 4.3 | 389 | 49 s |
+| **CP-SAT** | **0.468** | **−53 % / −54 %** | 33 % | 9 934 | 2 317 | 4.2 | 359 | 120 s |
+| CP-SAT without reserve (ablation) | 0.349 | −65 % / −64 % | 23 % | 5 032 | 1 732 | 2.0 | 316 | 120 s |
+
+![Algorithm comparison](../results/algorithms.png)
+
+All 700 runs produced validated, energy-safe schedules; no strategy failed on any instance. The
+ranking is the same for the mean and the median and holds on most individual seeds (Figure above):
+the three single-rule baselines stay within ±7 % of each other, joint greedy is
+about a fifth better, rolling about a third and offline CP-SAT about a half. Offline CP-SAT never had
+to fall back to its warm start, but its optimality gap stays large (median 62 %, range 18–76 %):
+the lower bound of the circuit model is weak, so these are good incumbents, not proven optima.
+
+### 5.3 Sensitivity experiments
+
+Median paired change of $J$ against FCFS (means differ only where noted):
+
+| Experiment | Setting | Staged | Deadline | Joint | Rolling | CP-SAT |
+|---|---|---|---|---|---|---|
+| Load | 20 orders | +7 % | +10 % | −30 % | −43 % | −62 % |
+| | 40 orders | +2 % | −4 % | −23 % | −37 % | −54 % |
+| | 60 orders | +8 % | +10 % | −16 % | −18 % | −47 % |
+| Chargers | 1 bay | +45 % | −1 % | −20 % | −28 % | −60 % |
+| | 2 bays | +2 % | −4 % | −23 % | −37 % | −54 % |
+| Imbalance A:B | 2:1 | +4 % | +2 % | −15 % ¹ | −25 % | −48 % |
+| | 3:1 | 0 % | −6 % | −29 % | −30 % | −47 % |
+| Safety threshold | 20 % | +2 % | +11 % | −18 % | −16 % | −51 % |
+| | 30 % | +17 % | −1 % | −13 % | −16 % | −52 % |
+| Urgent orders | +10 % | +1 % | −3 % | −12 % | −24 % | −52 % |
+| | +20 % | +4 % | −5 % | −8 % | −20 % | −50 % |
+
+¹ Mean +19 %: one seed scores $J = 3.7$ although joint beats FCFS on makespan, lateness and energy
+there (Section 6.3).
+
+![Load](../results/load.png)
+
+- **Load.** Every method degrades as orders are added, but the gap to FCFS shrinks for the
+  heuristics and for rolling (−43 % → −18 %) while CP-SAT keeps −47 % to −62 %. At 60 orders every
+  method is late on more than half the orders (late rate 54–69 %); the fleet is simply over capacity,
+  and charging (7–10 sessions of up to 17 min) is the binding resource.
+- **One charging bay.** FCFS's charger queue grows from 1 437 s to 4 001 s, and the staged baseline
+  collapses (+45 %): it decides charging last, so robots arrive at the single bay together. Joint
+  greedy and CP-SAT, which decide charging together with the orders, hold their advantage; CP-SAT
+  improves most (−60 %).
+- **Zone imbalance.** With more work on loop A, makespan grows for all methods because R1/R2 become
+  the bottleneck; the relative ranking is unchanged.
+- **Safety threshold.** A higher threshold forces more charging for everyone. CP-SAT is insensitive
+  (−51 % / −52 %), while rolling falls back to the level of joint greedy (−16 %): each of its windows
+  must end with a full reserve, which with a 20–30 % threshold forces early charging that an
+  offline view would avoid.
+- **Urgent orders.** Short-deadline, high-priority orders hurt every method; offline CP-SAT keeps
+  −50 %, rolling −20 % to −24 %. Deadline-first ordering, the obvious rule for urgent work, gains
+  only 3–5 %.
+
 ## 6. Discussion
 
-*(to be completed)*
+### 6.1 Where does the improvement come from?
+
+Decomposing $J$ into its four normalised terms (base setting, mean contribution; FCFS contributes
+0.25 per term) shows that the methods improve in different ways:
+
+| Strategy | $C_{\max}$ | Tardiness | Queueing | Energy | $J$ | $J$ without queueing term ² |
+|---|---|---|---|---|---|---|
+| FCFS | 0.250 | 0.250 | 0.250 | 0.250 | 1.00 | 1.00 |
+| Joint greedy | 0.233 | 0.182 | 0.160 | 0.218 | 0.79 | 0.84 |
+| Rolling | 0.211 | 0.157 | 0.048 | 0.219 | 0.64 | 0.78 |
+| CP-SAT | 0.178 | 0.088 | 0.000 | 0.202 | 0.47 | 0.62 |
+| CP-SAT without reserve | 0.132 | 0.039 | 0.000 | 0.178 | 0.35 | 0.47 |
+
+² $(C_{\max} + \text{tardiness} + \text{energy})/0.75$, i.e. $J$ re-weighted over the three remaining terms.
+
+Both CP-SAT methods have **zero queueing**. The robots still wait, but as powered-down standby at
+their last station before departing, not in front of X or at H. In the model, standby is free while
+queueing drains the battery and counts in $J$, so the optimiser delays departures until the resource
+is free. The heuristics instead book a slot and drive to the waiting point. This is legitimate within
+the model, but it means that about half of CP-SAT's gain in $J$ is the queueing term. Without that term
+the ranking is unchanged (last column) and CP-SAT is still the clear winner: it cuts total tardiness
+by 62 % and the makespan by 28 % against FCFS (44 % and 23 % against joint greedy).
+
+The tardiness reduction comes mainly from charging: CP-SAT charges about as often as joint greedy
+(4.2 vs 3.9 sessions) but chooses **how much** to charge and when, whereas the heuristics always
+charge to 95 %, at 5 %/min up to 17 minutes per session, often in the middle of a busy period.
+
+### 6.2 The end-of-horizon reserve
+
+The first CP-SAT experiments did not require any battery left after the last order. The optimiser
+then drained the batteries to the safety threshold and skipped charging whenever the initial charge
+sufficed: on every 20-order instance it never charged, and on 40 orders it charged half as often as
+the heuristics (2.0 vs 3.9–5.0). The heuristics always keep enough charge to reach a bay behind a
+full queue. Imposing the same reserve on CP-SAT raised its $J$ from 0.349 to 0.468 at 40 orders but
+hardly mattered at 60 orders (−51 % vs −47 % median), where robots must charge anyway. About a fifth
+of offline CP-SAT's apparent advantage at moderate load (12 of 65 percentage points) was therefore an
+end-of-horizon effect. Any
+offline comparison against continuous-operation policies needs an explicit terminal condition.
+
+A second, smaller lesson: the optimiser placed the terminal SOC exactly on the reserve boundary, and
+the simulator's reserve check, which also drains while queueing for X, rejected about 28 % of those
+plans until a 0.5 % SOC margin was added. Exact model/simulator agreement matters most precisely
+where an optimiser pushes against a constraint.
+
+### 6.3 The normalised objective
+
+Normalising by FCFS achieved its purpose: without it, priority-weighted tardiness (tens of thousands
+of seconds) would dominate the other terms by two orders of magnitude, and the four terms contribute
+comparably. The price is instability on instances where an FCFS term is close to
+zero. On one 2:1 instance FCFS queued for only 18 s, so the queueing term was divided by its 60 s
+floor, and joint greedy's 735 s of queueing alone added 3.06 to its $J$ (total 3.7) although joint
+beat FCFS on makespan, lateness and energy. The same effect produces means above 1 for staged and
+deadline at 20 orders (medians 0.96–0.97). Medians and paired comparisons are therefore reported
+throughout. A more robust choice would normalise by fixed, instance-independent scales (e.g. the
+mean over the whole experiment) or by the instance's median over all strategies.
+
+### 6.4 Online versus offline
+
+Rolling is the only method that does not know future orders, yet in the base setting it beats every
+heuristic that does (median −37 % vs −23 % for joint greedy), and it stays 8–14 percentage points
+ahead of joint greedy with 20 orders, one bay, 2:1 imbalance and urgent orders. Its weaknesses are
+the ones expected of a receding horizon: with a 20–30 % safety threshold its per-window reserve forces
+early charging, and at 60 orders or 3:1 imbalance its short look-ahead cannot plan around the
+bottleneck, so it is only level with joint greedy (and slightly behind it at a 20 % threshold). Its
+re-plans are bounded by deterministic solver work (about 1 s each on a 2-vCPU machine, 49 s for a
+full 40-order day), so it would run in real time and gives bit-identical results on any machine.
+
+### 6.5 Limitations
+
+- CP-SAT results depend on hardware (wall-time budget); all were produced on one machine type.
+- Optimality gaps are large; better lower bounds (e.g. a relaxation per loop) would be needed to
+  claim near-optimality.
+- The heuristics see all future orders, which favours them against rolling, but not against offline
+  CP-SAT.
+- The charging model is linear, the network has a single intersection, and robots move on fixed
+  routes without kinematics.
 
 ## 7. Conclusion
 
-*(to be completed)*
+A simulator for two delivery loops that share one intersection and one charging area was built,
+with an independent validator, a browser replay, and an experiment pipeline that compares six
+strategies on identical, seeded instances. Over 700 validated runs:
+
+1. **Deciding orders, intersection slots and charging jointly pays off.** Single-rule baselines
+   (FCFS, deadline-first, staged) stay within a few percent of each other. The joint greedy heuristic
+   gains about 20 %, and CP-SAT, which optimises all decisions in one model, about 50 % in $J$
+   (62 % less tardiness, 28 % shorter makespan than FCFS), consistently across load, charger,
+   imbalance, safety and urgent-order settings.
+2. **Partial charging is the main lever.** Under load the chargers, not the intersection, are the
+   bottleneck; choosing how much to charge, rather than always charging to 95 %, removes most of the
+   lateness. Separating the charging decision from assignment (the staged baseline) is worst with a
+   single bay.
+3. **Online re-optimisation is practical.** Rolling CP-SAT, without knowledge of future orders,
+   beats all heuristics at moderate load with about a second per re-plan; under heavy load or a high
+   safety threshold it is only level with the joint greedy heuristic.
+4. **Fair comparison needs care.** Requiring the same end-of-horizon battery reserve changed the
+   CP-SAT result substantially (0.35 → 0.47), and the normalised objective must be read with medians
+   because near-zero reference terms can dominate it.

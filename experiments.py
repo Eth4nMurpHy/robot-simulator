@@ -141,11 +141,17 @@ def figures(rows, summary, strategies, out):
         settings = list(dict.fromkeys(s['setting'] for s in items))
         fig, axes = plt.subplots(1, 2, figsize=(11, 4))
         width = .8 / len(strategies)
-        for ax, key, title in zip(axes, ['objective', 'tardiness_rate'], ['Objective J', 'Late-task rate']):
+        for ax, key, title in zip(axes, ['objective', 'tardiness_rate'], ['Objective J (median, IQR)', 'Late-task rate (median, IQR)']):
             for j, strategy in enumerate(strategies):
-                cells = [next((s for s in items if s['setting'] == g and s['strategy'] == strategy), None) for g in settings]
-                ax.bar([i + j * width for i in range(len(settings))], [c[f'{key}_mean'] if c else math.nan for c in cells],
-                       width, yerr=[[min(c[f'{key}_std'], c[f'{key}_mean']) if c else 0 for c in cells], [c[f'{key}_std'] if c else 0 for c in cells]], label=strategy, color=colors.get(strategy, '#888'), capsize=2)
+                stats = []
+                for g in settings:
+                    values = sorted(float(r[key]) for r in rows if r['experiment'] == experiment and r['setting'] == g
+                                    and r['strategy'] == strategy and r['status'] == 'ok')
+                    q = statistics.quantiles(values, n=4) if len(values) > 1 else values * 3
+                    stats.append((statistics.median(values), q[0], q[2]) if values else (math.nan, 0, 0))
+                ax.bar([i + j * width for i in range(len(settings))], [m for m, _, _ in stats], width,
+                       yerr=[[m - lo for m, lo, _ in stats], [hi - m for m, _, hi in stats]],
+                       label=strategy, color=colors.get(strategy, '#888'), capsize=2)
             ax.set_xticks([i + width * (len(strategies) - 1) / 2 for i in range(len(settings))], settings)
             ax.set_title(f'{title} — {experiment}')
         axes[0].legend(fontsize=8)
