@@ -16,7 +16,8 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from simulator import STRATEGIES, InputError, generate_tasks, random_robot_soc, simulate
 
-OPTIMIZERS = ['cpsat', 'rolling'] if importlib.util.find_spec('ortools') else []
+# cpsat-nores: ablation of offline CP-SAT without the end-of-horizon battery reserve the others keep.
+OPTIMIZERS = ['cpsat', 'cpsat-nores', 'rolling'] if importlib.util.find_spec('ortools') else []
 BASE = dict(count=40, a_share=.5, chargers=2, safety_soc=10, urgent=0)
 # (experiment, setting label, overrides of BASE)
 EXPERIMENTS = [
@@ -43,7 +44,10 @@ def run(job):
     row = dict(strategy=strategy, seed=seed, tasks=len(tasks), status='ok', message='')
     started = time.perf_counter()
     try:
-        result = simulate(tasks, config, strategy, None, options.get(strategy))
+        if strategy == 'cpsat-nores':
+            result = simulate(tasks, config, 'cpsat', None, {**options.get('cpsat', {}), 'terminal_reserve': False})
+        else:
+            result = simulate(tasks, config, strategy, None, options.get(strategy))
         row.update({k: result['summary'][k] for k in METRICS})
         row.update({f'term_{k}': v for k, v in result['summary']['objective_terms'].items()})
         solver = result.get('solver') or {}
@@ -77,6 +81,7 @@ def summarise(rows):
             line[f'{key}_mean'] = statistics.fmean(values) if values else math.nan
             line[f'{key}_std'] = statistics.stdev(values) if len(values) > 1 else 0.
             line[f'{key}_worst'] = max(values) if values else math.nan
+            line[f'{key}_median'] = statistics.median(values) if values else math.nan
         out.append(line)
     return out
 
@@ -93,15 +98,16 @@ def markdown(summary, strategies):
     lines = ['# Experiment results', '',
              'Mean ± std over seeds. J is the normalised objective (each term divided by the FCFS value on the same',
              'instance, equal weights; FCFS = 1, lower is better). "J vs FCFS" is the mean paired change against FCFS.',
+             'Medians are given because J is sensitive to near-zero FCFS terms (see the floors in README).',
              'Failures = runs with no safe schedule.', '']
     for experiment in dict.fromkeys(s['experiment'] for s in summary):
-        lines += [f'## {experiment}', '', '| Setting | Strategy | J | J vs FCFS | Makespan (s) | Late rate | Tardiness (s) | X wait (s) | Charge wait (s) | Energy (%) | Runtime (s) | Failures |',
-                  '|---|---|---|---|---|---|---|---|---|---|---|---|']
+        lines += [f'## {experiment}', '', '| Setting | Strategy | J mean ± std | J median | J vs FCFS (mean / median) | Makespan (s) | Late rate | Tardiness (s) | X wait (s) | Charge wait (s) | Energy (%) | Runtime (s) | Failures |',
+                  '|---|---|---|---|---|---|---|---|---|---|---|---|---|']
         for s in summary:
             if s['experiment'] != experiment:
                 continue
             f = lambda k, d=0: f"{s[k + '_mean']:.{d}f} ± {s[k + '_std']:.{d}f}"
-            lines.append(f"| {s['setting']} | {s['strategy']} | {f('objective', 3)} | {s['j_vs_fcfs_mean'] * 100:+.1f}% | {f('makespan')} | {s['tardiness_rate_mean']:.2f} | "
+            lines.append(f"| {s['setting']} | {s['strategy']} | {f('objective', 3)} | {s['objective_median']:.3f} | {s['j_vs_fcfs_mean'] * 100:+.1f}% / {s['j_vs_fcfs_median'] * 100:+.1f}% | {f('makespan')} | {s['tardiness_rate_mean']:.2f} | "
                          f"{f('total_tardiness')} | {f('cross_wait', 1)} | {f('charge_wait')} | {f('energy', 1)} | {s['runtime_mean']:.2f} | {s['failures']}/{s['runs']} |")
         lines.append('')
     return '\n'.join(lines)
@@ -115,8 +121,8 @@ def figures(rows, summary, strategies, out):
     except ImportError:
         print('matplotlib not installed; skipping figures.')
         return
-    colors = dict(zip(['fcfs', 'staged', 'deadline', 'joint', 'cpsat', 'rolling'],
-                      ['#9a9a9a', '#c9a227', '#4a7fb5', '#3a8f5c', '#b4412b', '#7a4fa3']))
+    colors = dict(zip(['fcfs', 'staged', 'deadline', 'joint', 'cpsat', 'cpsat-nores', 'rolling'],
+                      ['#9a9a9a', '#c9a227', '#4a7fb5', '#3a8f5c', '#b4412b', '#e8a08f', '#7a4fa3']))
     base = [r for r in rows if r['experiment'] == 'algorithms' and r['status'] == 'ok']
     if base:
         fig, axes = plt.subplots(1, 3, figsize=(13, 4))
@@ -194,11 +200,11 @@ def main():
         print(f"[{len(done)}/{len(unique)}] {dict(key[0])} {row['strategy']:<9} seed {row['seed']:<3} "
               + (f"J={row['objective']:.3f} ({row['runtime']:.1f}s)" if row['status'] == 'ok' else 'FAILED ' + row['message']), flush=True)
 
-    light = [k for k in unique if k[1] != 'cpsat' and k not in done]
+    light = [k for k in unique if not k[1].startswith('cpsat') and k not in done]
     with ProcessPoolExecutor(args.jobs) as pool:
         for key, row in zip(light, pool.map(run, [(*k, options) for k in light])):
             record(key, row)
-    for key in (k for k in unique if k[1] == 'cpsat' and k not in done):  # one at a time: CP-SAT uses its own workers
+    for key in (k for k in unique if k[1].startswith('cpsat') and k not in done):  # one at a time: CP-SAT uses its own workers
         record(key, run((*key, options)))
     rows = [dict(experiment=e, setting=label, **done[key])
             for e, label, setting in groups for seed in seeds for s in args.strategies

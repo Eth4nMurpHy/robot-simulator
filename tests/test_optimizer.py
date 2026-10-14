@@ -73,8 +73,9 @@ class OptimizerTests(unittest.TestCase):
 
     def test_charge_amount_is_decided_and_bay_is_vacated(self):
         tasks = [dict(task_id='one', pickup='A4', dropoff='A3', due_time=2000)]
+        # Without the terminal reserve the optimum charges just enough for the delivery itself.
         result = simulate(tasks, dict(initial_soc=43,safety_soc=30,chargers=1), 'cpsat',
-                          custom_strategy=dict(time_limit=10))
+                          custom_strategy=dict(time_limit=10, terminal_reserve=False))
         self.check_result(result, tasks)
         self.assertEqual(result['solver']['status'], 'OPTIMAL')
         self.assertAlmostEqual(result['solver']['best_bound'], result['summary']['objective'], places=5)
@@ -100,10 +101,24 @@ class OptimizerTests(unittest.TestCase):
         cfg = dict(initial_soc=40,safety_soc=30)
         with self.assertRaises(InputError):
             simulate(tasks,cfg,'joint')
-        result = simulate(tasks,cfg,'cpsat')
+        result = simulate(tasks,cfg,'cpsat',None,dict(terminal_reserve=False))
         self.check_result(result,tasks)
         self.assertEqual(result['solver']['status'],'OPTIMAL')
         self.assertIsNone(result['solver']['hint_objective'])
+
+    def test_terminal_reserve_matches_heuristic_reserve(self):
+        tasks = [dict(task_id='one', pickup='A4', dropoff='A3', due_time=2000)]
+        cfg = dict(initial_soc=43, safety_soc=30, chargers=1)
+        free = simulate(tasks, cfg, 'cpsat', None, dict(time_limit=10, terminal_reserve=False))
+        fair = simulate(tasks, cfg, 'cpsat', None, dict(time_limit=10))
+        self.check_result(fair, tasks)
+        last = lambda r: max((a for a in r['actions'] if a['robot_id'] == r['tasks'][0]['robot_id']), key=lambda a: a['end_time'])['end_soc']
+        # The default keeps the heuristics' end-of-horizon reserve, so it must finish with more charge.
+        self.assertGreater(last(fair), last(free) + 5)
+        from optimizer import options_for
+        with self.assertRaises(InputError):
+            options_for(dict(terminal_reserve='yes'))
+        self.assertTrue(options_for(dict(terminal_reserve=False), rolling=True)['terminal_reserve'])
 
     def test_integer_grid_hint_is_complete_and_feasible(self):
         from optimizer import JointModel, options_for

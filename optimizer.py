@@ -26,10 +26,16 @@ def options_for(options, rolling=False):
     # safety cap, so results do not depend on machine speed or load.
     defaults = dict(time_limit=30 if rolling else 60, workers=1 if rolling else min(8, os.cpu_count() or 1), seed=0,
                     replan_seconds=60, horizon_seconds=600,
-                    max_charges_per_robot=None, deterministic_time=.1 if rolling else None)
+                    max_charges_per_robot=None, deterministic_time=.1 if rolling else None,
+                    # Same end-of-horizon battery reserve the heuristics keep (reach a charger even behind a
+                    # full queue). Without it offline CP-SAT drains batteries to the threshold and skips charging.
+                    terminal_reserve=True)
     if set(options) - set(defaults):
         raise InputError('Unknown optimizer options: ' + ', '.join(sorted(set(options) - set(defaults))))
     out = {**defaults, **options}
+    if not isinstance(out['terminal_reserve'], bool):
+        raise InputError('terminal_reserve must be true or false.')
+    out['terminal_reserve'] |= rolling
     for key, low, high in [('time_limit', .001, 3600), ('workers', 1, 32),
                            ('seed', 0, 2**31-1), ('replan_seconds', .001, 86400),
                            ('horizon_seconds', 1, 100000), ('max_charges_per_robot', 0, 200),
@@ -197,8 +203,8 @@ class JointModel:
                     m.add(nb['arrival_soc'] == na['soc'] - consumption).only_enforce_if(lit)
                     details[a, b].update(crosses=crosses, waits=waits, edges=edges)
             m.add_circuit(arcs)
-            # A cheap terminal reachability reserve is needed for the next online solve.
-            if rolling:
+            # Terminal reachability reserve: needed by the next online solve, and for a fair offline comparison.
+            if opts['terminal_reserve']:
                 for a, node in nodes.items():
                     if not a or node['task'] is None:
                         continue
@@ -442,7 +448,7 @@ def solve(base, tasks, opts, rolling=False):
         try:
             decoded = joint.decode(solver)
             build_result(decoded, base.results + tasks, 'cpsat', started, opts['norm'])
-            if rolling:
+            if opts['terminal_reserve']:
                 stage = 'terminal reserve'
                 active = {t['robot_id'] for t in decoded.results[len(base.results):]}
                 for k in range(4):

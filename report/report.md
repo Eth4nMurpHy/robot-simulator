@@ -202,7 +202,39 @@ full-instance $J$ like every other strategy.
 
 ## 5. Experiments
 
-*(to be completed from `results/`)*
+### 5.1 Setup
+
+The experiment plan of the proposal is run by `experiments.py`. Every configuration uses seeds 1–10;
+for a given seed all six strategies receive the identical order list, configuration and seeded
+initial SOC (50–100 % per robot), and the base setting is 40 orders, 2 bays, a 10 % safety threshold,
+a 1:1 zone split and no urgent orders. One factor is varied per experiment:
+
+| Experiment | Settings |
+|---|---|
+| Algorithm comparison | base |
+| Load | 20, 40, 60 orders |
+| Charging resources | 1 or 2 bays |
+| Zone imbalance | A:B = 1:1, 2:1, 3:1 |
+| Safety threshold | 10, 20, 30 % |
+| Dynamic orders | +0, +10, +20 % urgent orders (due 3–6 min after release, priority 4–5) |
+
+Identical instances that occur in several experiments (the base setting) are solved once, giving
+10 distinct settings × 10 seeds × 6 strategies = 600 runs. Each run reports $J$, its four raw terms,
+the late-order rate, queueing at X and at the chargers, energy, charging sessions and runtime. Because
+the seeds differ strongly in difficulty, the tables also give the **paired** change of $J$ against
+FCFS on the same instance.
+
+*Compute.* The four heuristics and the rolling strategy are deterministic (rolling solves are bounded
+by CP-SAT deterministic time, not wall time), so their results do not depend on the machine; this was
+checked by reproducing a rolling run bit for bit on two different machines. CP-SAT is wall-time
+bounded (120 s, 8 workers) and therefore hardware dependent; all CP-SAT runs used the same machine
+type (Google Colab high-RAM CPU VMs, 8 vCPU Intel Xeon @ 2.20 GHz, OR-Tools 9.15), one solve per VM at
+a time.
+
+*Fairness caveats.* The heuristics and offline CP-SAT know the whole order list in advance (but never
+start an order before its release); rolling is the only truly online method. CP-SAT does not need
+spare energy after the last delivery, whereas the heuristics keep a charging reserve and always charge
+to 95 %.
 
 ## 6. Discussion
 
