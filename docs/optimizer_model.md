@@ -304,6 +304,4 @@ The [Python API reference](https://or-tools.github.io/docs/pdoc/ortools/sat/pyth
 documents the circuit, hint and interval primitives. Simulator behavior and the
 implementation in this repository determine the specific constraints above.
 
-The recorded default-configuration matrix and validation timings are in
-[optimizer_benchmark.md](optimizer_benchmark.md); full diagnostics are in
-[optimizer_benchmark.json](optimizer_benchmark.json).
+Repeated-seed results for every strategy are produced by `experiments.py` (see `results/`).
