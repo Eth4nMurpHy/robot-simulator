@@ -81,7 +81,8 @@
 
     <form id="run-form" class="block config">
       <label for="strategy">Strategy</label>
-      <select id="strategy"><option value="custom" selected>My command plan</option><option value="joint">Joint greedy</option><option value="fcfs">FCFS</option><option value="staged">Staged (assign → cross → charge)</option><option value="deadline">Deadline + reservations</option></select>
+      <select id="strategy"><option value="custom" selected>My command plan</option><option value="joint">Joint greedy</option><option value="fcfs">FCFS</option><option value="staged">Staged (assign → cross → charge)</option><option value="deadline">Deadline + reservations</option><option value="cpsat">CP-SAT optimisation</option><option value="rolling">Rolling-horizon CP-SAT</option></select>
+      <div id="optimizer-field" hidden><label for="time-limit">CP-SAT time limit (s)</label><input id="time-limit" type="number" min="1" max="600" value="20" required></div>
       <p class="muted" id="map-source"></p>
 
       <h3>Tasks</h3>
