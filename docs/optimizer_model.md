@@ -23,8 +23,8 @@ supplies the two optimizer labels.
 
 | Option | Offline default | Rolling default | Meaning |
 |---|---:|---:|---|
-| `time_limit` | 60 | 2 | Wall-clock limit in seconds **per CP-SAT call** |
-| `deterministic_time` | 3600 with several workers, else `0.05 * time_limit` | `0.05 * time_limit` | CP-SAT deterministic work limit |
+| `time_limit` | 60 | 30 (safety cap) | Wall-clock limit in seconds **per CP-SAT call** |
+| `deterministic_time` | 3600 with several workers, else `0.05 * time_limit` | 0.1 (binding) | CP-SAT deterministic work limit |
 | `workers` | `min(8, cpu_count)` | 1 | CP-SAT search workers |
 | `seed` | 0 | 0 | CP-SAT random seed |
 | `replan_seconds` | 60 | 60 | Period between online decision epochs |

@@ -22,9 +22,11 @@ def options_for(options, rolling=False):
         raise InputError('Optimizer options must be an object.')
     # Offline CP-SAT relies on parallel LNS workers; one worker barely improves the warm start on
     # 40+ tasks. Rolling solves stay single-worker and deterministic-time bounded (reproducible).
-    defaults = dict(time_limit=2 if rolling else 60, workers=1 if rolling else min(8, os.cpu_count() or 1), seed=0,
+    # Rolling: the deterministic budget binds (0.1 per solve, about 0.5 s); the 30 s wall limit is only a
+    # safety cap, so results do not depend on machine speed or load.
+    defaults = dict(time_limit=30 if rolling else 60, workers=1 if rolling else min(8, os.cpu_count() or 1), seed=0,
                     replan_seconds=60, horizon_seconds=600,
-                    max_charges_per_robot=None, deterministic_time=None)
+                    max_charges_per_robot=None, deterministic_time=.1 if rolling else None)
     if set(options) - set(defaults):
         raise InputError('Unknown optimizer options: ' + ', '.join(sorted(set(options) - set(defaults))))
     out = {**defaults, **options}

@@ -187,7 +187,7 @@ while orders remain:
     window ← known orders, most urgent first, until ≈ 600 s of work per loop
     plan ← CP-SAT on window from the robots' current states,
            with all already-committed X and bay reservations as fixed intervals
-           (1 worker, 2 s, deterministic budget; warm start = joint greedy on the window)
+           (1 worker, deterministic budget ≈ 0.5 s; warm start = joint greedy on the window)
     commit every job of plan that starts before t + 60 s; freeze its reservations
     t ← t + 60 s
 ```
