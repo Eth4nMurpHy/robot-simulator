@@ -204,6 +204,39 @@ class SimulatorTests(unittest.TestCase):
         lying['robots'][0]['initial_soc'] = 90
         self.assertIn('R1: initial SOC does not match the configuration', validate_result(lying))
 
+    def test_validator_rejects_forged_occupancy_and_capacity(self):
+        result = simulate([simple_task(pickup='A4', dropoff='A1')], strategy='fcfs')
+        ghost = copy.deepcopy(result)
+        for item in ghost['actions'] + ghost['tasks']:
+            item['robot_id'] = 'R9'
+        self.assertIn('Robot roster must be exactly R1-R4 and every task/action must use it', validate_result(ghost))
+        linger = copy.deepcopy(result)
+        cross = next(a for a in linger['actions'] if a['action'] == 'cross')
+        for a in linger['actions']:
+            if a['start_time'] >= cross['end_time']:
+                a['start_time'] += 100
+                a['end_time'] += 100
+        self.assertIn('R1: does not leave X immediately after crossing', validate_result(linger))
+        double = copy.deepcopy(simulate([simple_task()], strategy='fcfs'))
+        unload = next(a for a in double['actions'] if a['action'] == 'unload')
+        unload.update(action='load', task_id='other')
+        self.assertIn('R1: loads a second task while carrying one', validate_result(double))
+        busy = simulate(generate_tasks(40, 1), {'chargers': 1}, 'joint')
+        charges = sorted((a for a in busy['actions'] if a['action'] == 'charge'), key=lambda a: a['start_time'])
+        first = charges[0]
+        later = next(a for a in charges if a['robot_id'] != first['robot_id'])
+        tampered = copy.deepcopy(busy)
+        departure = next(a for a in tampered['actions'] if a['robot_id'] == first['robot_id'] and a['from_node'] == 'C1'
+                         and a['start_time'] >= first['end_time'] - 1e-9)
+        departure['start_time'], departure['end_time'] = later['start_time'] + 1, later['start_time'] + 21
+        tampered['reservations']['C1'] = []
+        self.assertIn('C1: physically overlapping use', validate_result(tampered))
+        two_bays = simulate(generate_tasks(40, 1), {}, 'joint')
+        self.assertTrue(any(a['to_node'] == 'C2' for a in two_bays['actions']))
+        disabled = copy.deepcopy(two_bays)
+        disabled['config']['chargers'] = 1
+        self.assertIn('Robot entered a disabled charging bay', validate_result(disabled))
+
     def test_min_soc_counts_idle_robots(self):
         result = simulate([simple_task()], {'robot_soc': [100, 40, 40, 40]}, 'fcfs')
         self.assertEqual(result['summary']['min_soc'], 40)

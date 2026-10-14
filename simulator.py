@@ -394,21 +394,45 @@ def validate_result(result):
         gap = 2 * cfg['buffer_seconds'] if resource == 'X' else 0
         if any((a.get('open_ended', False) or a['end_time'] + gap > b['start_time'] + 1e-8) for a, b in zip(ordered, ordered[1:])):
             errors.append(f'{resource}: overlapping reservations')
+    roster = [r['robot_id'] for r in result['robots']]
+    if roster != ['R1', 'R2', 'R3', 'R4'] or any(x['robot_id'] not in roster for x in result['actions'] + completed):
+        errors.append('Robot roster must be exactly R1-R4 and every task/action must use it')
     bays = {f'C{i + 1}' for i in range(int(cfg['chargers']))}
-    occupancy = {'X': [a for a in result['actions'] if a['action'] == 'cross'],
-                 **{bay: [a for a in result['actions'] if a['action'] == 'charge' and a['to_node'] == bay] for bay in bays}}
+    if any(a['to_node'].startswith('C') and a['to_node'] not in bays for a in result['actions']):
+        errors.append('Robot entered a disabled charging bay')
+    # Physical occupancy from the trace alone: X from crossing entry to exit, a bay from arrival to
+    # departure (or the end of the trace while parked), whatever the reservation labels say.
+    horizon = max([a['end_time'] for a in result['actions']] + [0])
+    occupancy = {'X': [(a['start_time'], a['end_time']) for a in result['actions'] if a['action'] == 'cross'], **{bay: [] for bay in bays}}
+    for rid in roster:
+        trace = sorted((a for a in result['actions'] if a['robot_id'] == rid), key=lambda a: a['start_time'])
+        for i, a in enumerate(trace):
+            if a['action'] == 'cross':
+                leave = trace[i + 1] if i + 1 < len(trace) else None
+                if leave is None or leave['from_node'] != 'X' or leave['to_node'] == 'X' or abs(leave['start_time'] - a['end_time']) > 1e-6:
+                    errors.append(f'{rid}: does not leave X immediately after crossing')
+            if a['to_node'] in bays and a['from_node'] != a['to_node']:
+                leave = next((b for b in trace[i + 1:] if b['from_node'] == a['to_node'] and b['to_node'] != a['to_node']), None)
+                occupancy[a['to_node']].append((a['end_time'], leave['start_time'] if leave else horizon))
     for resource, uses in occupancy.items():
-        ordered = sorted(uses, key=lambda a: a['start_time'])
         gap = 2 * cfg['buffer_seconds'] if resource == 'X' else 0
-        if any(a['end_time'] + gap > b['start_time'] + 1e-8 for a, b in zip(ordered, ordered[1:])):
+        if any(a[1] + gap > b[0] + 1e-8 for a, b in zip(sorted(uses), sorted(uses)[1:])):
             errors.append(f'{resource}: physically overlapping use')
     expected_soc = Config.parse(cfg)
     for index, robot in enumerate(result['robots']):
         if robot['robot_id'] != f'R{index + 1}' or abs(robot['initial_soc'] - expected_soc.start_soc(index)) > 1e-6:
             errors.append(f"{robot['robot_id']}: initial SOC does not match the configuration")
         actions = sorted([a for a in result['actions'] if a['robot_id'] == robot['robot_id']], key=lambda a: a['start_time'])
-        last_end, soc, node = 0., robot['initial_soc'], robot['start_node']
+        last_end, soc, node, carrying = 0., robot['initial_soc'], robot['start_node'], None
         for index, a in enumerate(actions):
+            if a['action'] == 'load':
+                if carrying is not None:
+                    errors.append(f"{robot['robot_id']}: loads a second task while carrying one")
+                carrying = a['task_id']
+            elif a['action'] == 'unload':
+                if carrying != a['task_id']:
+                    errors.append(f"{robot['robot_id']}: unloads a task it is not carrying")
+                carrying = None
             if a['start_time'] < last_end - 1e-8 or a['end_time'] < a['start_time']:
                 errors.append(f"{robot['robot_id']}: overlapping/reversed actions")
             if abs(a['start_soc'] - soc) > 1e-6 or abs(a['end_soc'] - (a['start_soc'] - a['energy'])) > 1e-6:

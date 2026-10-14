@@ -180,9 +180,10 @@ def main():
             for row in csv.DictReader(f):
                 key = (labels.get((row['experiment'], row['setting'])), row['strategy'], int(row['seed']))
                 if key[0] and row['strategy'] in args.reuse_strategies and key in set(unique):
-                    numeric = {k: float(v) for k, v in row.items() if k not in ('experiment', 'setting', 'strategy', 'status', 'message', 'solver_status') and v != ''}
+                    text = ('experiment', 'setting', 'strategy', 'status', 'message', 'solver_status')
+                    counts = ('seed', 'tasks', 'charging_sessions', 'violations', 'fallbacks')
+                    numeric = {k: (int if k in counts else float)(float(v)) for k, v in row.items() if k not in text and v != ''}
                     done[key] = {k: v for k, v in row.items() if k not in ('experiment', 'setting', 'j_vs_fcfs')} | numeric
-                    done[key]['seed'] = int(row['seed'])
         print(f'Reusing {len(done)} rows from {args.reuse}.')
 
     def record(key, row):

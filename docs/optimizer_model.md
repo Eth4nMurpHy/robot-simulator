@@ -243,10 +243,10 @@ the **returned** schedule, including fallback. Missing solver incumbents use
 `null`, never a fabricated solver objective. Raw `OPTIMAL` plus a fallback does
 not claim that the returned physical schedule is optimal.
 
-Rolling results include all solve records under `replans`. Their top-level
-objective is the last solve's objective, comparable with final decoded J because
-the final solve covers all remaining tasks. There is no single global online
-bound or gap: those fields are `null`. Local bounds remain in individual solve
+Rolling results include all solve records under `replans`, each with its own
+online normalisation. The top-level `objective` is therefore the final schedule's
+full-instance J, not a solver value, and `decoded_differs`/`objective_difference`
+are `null`. There is no single global online bound or gap: those fields are `null`. Local bounds remain in individual solve
 records. `fallback_count` distinguishes local fallbacks from failure of the run.
 
 ## Rolling algorithm

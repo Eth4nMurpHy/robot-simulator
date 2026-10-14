@@ -547,12 +547,12 @@ def rolling_plan(base, tasks, opts):
                     commitments=commitments, frozen_reservations=frozen)
         history.append(info)
         tick += period
-    last_objective = history[-1]['objective']
-    difference = score(base, opts['norm'])-last_objective if last_objective is not None else None
-    metadata = dict(status='ROLLING', objective=last_objective, best_bound=None, gap=None,
+    # Each re-plan used its own online normalisation, so solver objectives are not comparable with
+    # the final full-instance J; report the evaluated J only (per-solve values stay in `replans`).
+    final = score(base, opts['norm'])
+    metadata = dict(status='ROLLING', objective=final, best_bound=None, gap=None,
                     wall_time=sum(h['wall_time'] for h in history), num_solves=len(history),
-                    decoded_objective=score(base, opts['norm']), decoded_differs=abs(difference)>1e-5 if difference is not None else None,
-                    objective_difference=difference,
+                    decoded_objective=final, decoded_differs=None, objective_difference=None,
                     fallback_count=sum(h['fallback'] is not None for h in history), replans=history,
                     workers=opts['workers'], seed=opts['seed'])
     return base, metadata
