@@ -16,6 +16,8 @@ NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
 OBJECTIVE_WEIGHTS = {'makespan': 1, 'tardiness': 3, 'wait': .5, 'energy': 2}
 STRATEGIES = {'fcfs': 'First come, first served', 'deadline': 'Deadline + reservations',
               'joint': 'Joint greedy scheduling'}
+OPTIMIZER_STRATEGIES = {'cpsat': 'CP-SAT joint optimisation',
+                        'rolling': 'Rolling-horizon CP-SAT'}
 
 
 @dataclass
@@ -181,7 +183,11 @@ class Planner:
 
     def crossing(self, r, tid):
         duration, energy, _ = edge_metrics(self.world, r['node'], 'X')
-        start = slot(self.calendars['X'], r['time'], duration, 2 * self.c.buffer_seconds)
+        earliest = r['time']
+        hints = getattr(self, 'crossing_hints', {}).get(r['robot_id'], [])
+        if hints:
+            earliest = max(earliest, hints.pop(0))
+        start = slot(self.calendars['X'], earliest, duration, 2 * self.c.buffer_seconds)
         self.wait(r, start, 'cross_wait', tid)
         item = self.action(r, 'cross', duration, energy,
                            to='X', task_id=tid, resource='X')
@@ -205,32 +211,35 @@ class Planner:
             nxt = loop[(loop.index(r['node']) + 1) % len(loop)]
             self.move_edge(r, nxt, tid)
 
-    def charge(self, r):
+    def charge(self, r, bay_choice=None, target_soc=None, earliest_start=None):
         self.travel(r, 'X')
         self.move_edge(r, 'H', '')
         # Queue at H (outside the bays); account for the travel H -> bay.
+        target = self.c.charge_target if target_soc is None else number(target_soc, 'target_soc', self.c.safety_soc, 100)
+        if bay_choice is not None and bay_choice not in self.calendars.keys() - {'X'}:
+            raise InputError('Unavailable charging bay.')
         rate = self.c.charge_per_min / 60
         drain = self.c.wait_energy_per_min / 60
         choices = []
         for bay, calendar in self.calendars.items():
-            if bay == 'X':
+            if bay == 'X' or (bay_choice is not None and bay != bay_choice):
                 continue
             travel_time, travel_energy, _ = edge_metrics(self.world, 'H', bay)
             arrival = r['time'] + travel_time
             arrival_soc = r['soc'] - travel_energy
-            if arrival_soc < self.c.safety_soc:
+            if arrival_soc < self.c.safety_soc - 1e-8:
                 continue
-            duration = max(0, (self.c.charge_target - arrival_soc) / rate)
-            start = slot(calendar, arrival, duration)
+            duration = max(0, (target - arrival_soc) / rate)
+            start = slot(calendar, max(arrival, earliest_start or 0), duration)
             # Wait increases charging duration. Recompute monotonically until stable.
             for _ in range(len(calendar) + 3):
                 soc = arrival_soc - (start - arrival) * drain
-                duration = max(0, (self.c.charge_target - soc) / rate)
+                duration = max(0, (target - soc) / rate)
                 nxt = slot(calendar, start, duration)
                 if abs(nxt - start) < 1e-8:
                     break
                 start = nxt
-            if soc >= self.c.safety_soc:
+            if soc >= self.c.safety_soc - 1e-8:
                 choices.append((start + duration, start, duration, bay, travel_time))
         if not choices:
             raise InputError('Insufficient energy to reach and queue for a charger safely.')
@@ -382,6 +391,12 @@ def validate_result(result):
 
 
 def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=None):
+    if isinstance(strategy, str) and strategy in OPTIMIZER_STRATEGIES:
+        try:
+            from optimizer import optimize
+        except ImportError as exc:
+            raise InputError('CP-SAT strategies require OR-Tools; run with .venv/bin/python or install ortools.') from exc
+        return optimize(tasks, config, strategy, world, custom_strategy)
     if strategy == 'custom':
         from command_plan import execute_commands
         return execute_commands(tasks, config, world, custom_strategy)
@@ -394,6 +409,12 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
     if rules:
         cfg.charge_target = rules['charge_target']
     plan = Planner(cfg, world, rules)
+    plan = plan_tasks(plan, tasks, strategy)
+    return build_result(plan, tasks, strategy, started)
+
+
+def plan_tasks(plan, tasks, strategy='joint'):
+    rules = plan.rules
     pending = list(tasks)
     while pending:
         # Joint heuristic chooses among the next 8 released/future jobs; no optimality claim.
@@ -429,12 +450,17 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
             raise InputError('No energy-safe schedule found for the next tasks. ' + (failures[0] if failures else 'Check task configuration.'))
         _, tid, _, plan = min(choices, key=lambda x: x[:3])
         pending = [t for t in pending if t['task_id'] != tid]
+    return plan
+
+
+def build_result(plan, tasks, strategy, started):
+    cfg, rules = plan.c, plan.rules
     actions = sorted(plan.actions, key=lambda a: (a['start_time'], a['robot_id']))
     makespan = max(t['completion_time'] for t in plan.results)
     cross_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'cross_wait')
     charge_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'charge_wait')
     occupied = lambda key: sum(a['end_time'] - a['start_time'] for a in plan.calendars[key])
-    result = dict(strategy=strategy, strategy_label=rules['name'] if rules else STRATEGIES[strategy], config=asdict(cfg), nodes=NODES,
+    result = dict(strategy=strategy, strategy_label=rules['name'] if rules else {**STRATEGIES, **OPTIMIZER_STRATEGIES}[strategy], config=asdict(cfg), nodes=NODES,
                   map=plan.world, custom_strategy=rules,
                   robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f"{r['loop']}1", initial_soc=cfg.start_soc(i)) for i, r in enumerate(plan.robots)],
                   tasks=sorted(plan.results, key=lambda t: (t['release_time'], t['task_id'])), actions=actions,
