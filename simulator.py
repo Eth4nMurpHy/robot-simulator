@@ -11,9 +11,13 @@ NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
          'B1': [635, 375], 'B2': [825, 375], 'B3': [825, 165],
          'B4': [635, 165], 'WB': [560, 215], 'H': [500, 105],
          'C1': [450, 50], 'C2': [550, 50]}
-# Weights of the report objective J = Cmax + 3*sum(priority_i*T_i) + 0.5*(W_cross + W_charge) + 2*E.
-# Battery safety is a hard constraint enforced by the validator, never a weighted term.
-OBJECTIVE_WEIGHTS = {'makespan': 1, 'tardiness': 3, 'wait': .5, 'energy': 2}
+# Report objective J = sum_k w_k * term_k / max(reference_k, floor_k) over Cmax, sum(priority_i*T_i),
+# W_cross + W_charge and E. Each term is normalised by the FCFS schedule of the same instance, so no
+# unit (e.g. tardiness seconds) dominates; FCFS scores 1 (less if a term is below its floor, which
+# avoids dividing by a zero reference term). Battery safety is a hard constraint enforced by the validator, never a weighted term.
+OBJECTIVE_WEIGHTS = {'makespan': .25, 'tardiness': .25, 'wait': .25, 'energy': .25}
+OBJECTIVE_FLOORS = {'makespan': 1, 'tardiness': 60, 'wait': 60, 'energy': 1}
+REFERENCE_STRATEGIES = ('fcfs', 'staged', 'deadline')
 STRATEGIES = {'fcfs': 'First come, first served', 'staged': 'Staged: assign, then cross, then charge',
               'deadline': 'Deadline + reservations', 'joint': 'Joint greedy scheduling'}
 OPTIMIZER_STRATEGIES = {'cpsat': 'CP-SAT joint optimisation',
@@ -130,10 +134,31 @@ def generate_tasks(count=40, seed=42, a_share=.5, release_gap=12, tight=False, u
     return sorted(tasks, key=lambda t: (t['release_time'], t['task_id']))
 
 
-def objective(tasks, makespan, waits, energy, weights=OBJECTIVE_WEIGHTS):
-    """Scalar objective J used to compare every strategy, including the optimizers."""
-    return (weights['makespan'] * makespan + weights['wait'] * waits + weights['energy'] * energy
-            + weights['tardiness'] * sum(t['priority'] * t['tardiness'] for t in tasks))
+def objective_terms(plan):
+    """Raw objective components of a planned schedule (seconds and SOC percentage points)."""
+    return dict(makespan=max([t['completion_time'] for t in plan.results] + [0]),
+                tardiness=sum(t['priority'] * t['tardiness'] for t in plan.results),
+                wait=sum(a['end_time'] - a['start_time'] for a in plan.actions if a['action'] in ('cross_wait', 'charge_wait')),
+                energy=sum(max(0, a['energy']) for a in plan.actions))
+
+
+def objective(terms, norm):
+    return sum(norm['coefficients'][k] * terms[k] for k in OBJECTIVE_WEIGHTS)
+
+
+def normaliser(tasks, cfg, world=None):
+    """Per-unit coefficients w_k / reference_k from the first baseline that schedules this instance safely."""
+    for strategy in REFERENCE_STRATEGIES:
+        try:
+            plan = Planner(cfg, world)
+            reference = objective_terms(staged(plan, tasks) if strategy == 'staged' else plan_tasks(plan, tasks, strategy))
+            break
+        except InputError:
+            continue
+    else:
+        strategy, reference = None, dict(OBJECTIVE_FLOORS)
+    return dict(strategy=strategy, reference=reference,
+                coefficients={k: w / max(reference[k], OBJECTIVE_FLOORS[k]) for k, w in OBJECTIVE_WEIGHTS.items()})
 
 
 def random_robot_soc(seed=42, low=50, high=100):
@@ -447,8 +472,9 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
     if rules:
         cfg.charge_target = rules['charge_target']
     plan = Planner(cfg, world, rules)
+    norm = normaliser(tasks, cfg, world)
     plan = staged(plan, tasks) if strategy == 'staged' else plan_tasks(plan, tasks, strategy)
-    return build_result(plan, tasks, strategy, started)
+    return build_result(plan, tasks, strategy, started, norm)
 
 
 def plan_tasks(plan, tasks, strategy='joint'):
@@ -477,6 +503,8 @@ def plan_tasks(plan, tasks, strategy='joint'):
                     if rules:
                         score = custom_score(task, done, waits, energy, distance, rules)
                     elif strategy == 'joint':
+                        # Per-order greedy score in absolute units; normalising one order's increments by
+                        # whole-schedule FCFS totals would erase deadline pressure and cause energy deadlocks.
                         score = done['completion_time'] + 3 * task['priority'] * done['tardiness'] + .5 * waits + 2 * energy
                     else:
                         score = done['completion_time']
@@ -491,8 +519,9 @@ def plan_tasks(plan, tasks, strategy='joint'):
     return plan
 
 
-def build_result(plan, tasks, strategy, started):
+def build_result(plan, tasks, strategy, started, norm=None):
     cfg, rules = plan.c, plan.rules
+    norm = norm or normaliser(tasks, cfg, plan.world)
     actions = sorted(plan.actions, key=lambda a: (a['start_time'], a['robot_id']))
     makespan = max(t['completion_time'] for t in plan.results)
     cross_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'cross_wait')
@@ -524,7 +553,9 @@ def build_result(plan, tasks, strategy, started):
         cross_utilization=occupied('X') / makespan,
         charge_utilization=sum(occupied(f'C{i + 1}') for i in range(cfg.chargers)) / (makespan * cfg.chargers),
         charging_sessions=sum(a['action'] == 'charge' for a in actions), runtime=time.perf_counter() - started)
-    result['summary']['objective'] = objective(plan.results, makespan, cross_wait + charge_wait, result['summary']['energy'])
+    terms = objective_terms(plan)
+    result['summary'].update(objective=objective(terms, norm), objective_terms=terms,
+                             objective_reference=dict(strategy=norm['strategy'], terms=norm['reference']))
     if errors:
         raise RuntimeError('Schedule validation failed: ' + '; '.join(errors))
     return result

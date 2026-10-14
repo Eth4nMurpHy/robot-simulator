@@ -60,13 +60,16 @@ class OptimizerTests(unittest.TestCase):
                 result = simulate(tasks, strategy='cpsat', custom_strategy=dict(time_limit=10))
                 # Every job needs >=50 seconds and >=3 SOC. With >2 A jobs,
                 # one of two A robots must do two jobs, hence Cmax >=100.
-                # These chains achieve the bound with no positioning or waiting.
-                lower_bound = (50 if count == 4 else 100) + 2*3*count
+                # These chains achieve the bound with no positioning or waiting, and every
+                # job uses exactly 3 SOC, so the optimum attains each term's own lower bound.
+                terms = result['summary']['objective_terms']
                 self.check_result(result, tasks)
                 self.assertEqual(result['solver']['status'], 'OPTIMAL')
                 self.assertIsNone(result['solver']['fallback'])
-                self.assertAlmostEqual(result['summary']['objective'], lower_bound, places=5)
-                self.assertAlmostEqual(result['solver']['best_bound'], lower_bound, places=4)
+                self.assertAlmostEqual(terms['makespan'], 50 if count == 4 else 100, places=5)
+                self.assertAlmostEqual(terms['energy'], 3*count, places=5)
+                self.assertEqual((terms['tardiness'], terms['wait']), (0, 0))
+                self.assertAlmostEqual(result['solver']['best_bound'], result['summary']['objective'], places=5)
 
     def test_charge_amount_is_decided_and_bay_is_vacated(self):
         tasks = [dict(task_id='one', pickup='A4', dropoff='A3', due_time=2000)]
@@ -74,7 +77,7 @@ class OptimizerTests(unittest.TestCase):
                           custom_strategy=dict(time_limit=10))
         self.check_result(result, tasks)
         self.assertEqual(result['solver']['status'], 'OPTIMAL')
-        self.assertAlmostEqual(result['summary']['objective'], 651.2, places=4)
+        self.assertAlmostEqual(result['solver']['best_bound'], result['summary']['objective'], places=5)
         charges = [a for a in result['actions'] if a['action']=='charge']
         self.assertEqual(len(charges), 1)
         self.assertAlmostEqual(charges[0]['end_soc'], 50.2, places=5)
@@ -105,13 +108,15 @@ class OptimizerTests(unittest.TestCase):
     def test_integer_grid_hint_is_complete_and_feasible(self):
         from optimizer import JointModel, options_for
         from ortools.sat.python import cp_model
-        from simulator import plan_tasks, validate_tasks
+        from simulator import normaliser, plan_tasks, validate_tasks
         world = default_map()
         world['speed_m_per_s'] = 1.37
         tasks = validate_tasks(generate_tasks(20,2))
         base = Planner(Config(chargers=1),world)
+        opts = options_for(None)
+        opts['norm'] = normaliser(tasks, base.c, world)
         hint = plan_tasks(base.clone(),tasks)
-        model = JointModel(base,tasks,hint,options_for(None))
+        model = JointModel(base,tasks,hint,opts)
         self.assertTrue(model.hint_feasible)
         solver = cp_model.CpSolver()
         solver.parameters.num_search_workers = 1

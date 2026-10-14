@@ -1,9 +1,10 @@
 """Joint circuit/interval CP-SAT model; all output actions are made by Planner."""
 import math
+import os
 import time
 from ortools.sat.python import cp_model
 from customization import LOOPS, edge_metrics
-from simulator import Config, Planner, build_result, plan_tasks, slot, validate_tasks
+from simulator import Config, Planner, build_result, normaliser, objective, objective_terms, plan_tasks, slot, validate_tasks
 from simulator_types import InputError, number
 
 TIME = 1000
@@ -19,7 +20,9 @@ def options_for(options, rolling=False):
         options = {}
     if not isinstance(options, dict):
         raise InputError('Optimizer options must be an object.')
-    defaults = dict(time_limit=2 if rolling else 10, workers=1, seed=0,
+    # Offline CP-SAT relies on parallel LNS workers; one worker barely improves the warm start on
+    # 40+ tasks. Rolling solves stay single-worker and deterministic-time bounded (reproducible).
+    defaults = dict(time_limit=2 if rolling else 60, workers=1 if rolling else min(8, os.cpu_count() or 1), seed=0,
                     replan_seconds=60, horizon_seconds=600,
                     max_charges_per_robot=None, deterministic_time=None)
     if set(options) - set(defaults):
@@ -37,7 +40,8 @@ def options_for(options, rolling=False):
                 raise InputError(f'{key} must be an integer.')
             out[key] = int(out[key])
     if out['deterministic_time'] is None:
-        out['deterministic_time'] = out['time_limit'] * .05
+        # Single worker: a deterministic budget makes runs reproducible. Parallel: wall time binds.
+        out['deterministic_time'] = out['time_limit'] * .05 if out['workers'] == 1 else 3600
     return out
 
 
@@ -210,16 +214,18 @@ class JointModel:
         makespan = self.var('Cmax')
         previous = max([t['completion_time'] for t in base.results] + [0])
         m.add_max_equality(makespan, self.ends + [ceil_int(previous * TIME)])
-        tardiness = []
+        tardiness, c = [], opts['norm']['coefficients']
         for i, task in enumerate(tasks):
             late = self.var(f'T_{i}')
             m.add_max_equality(late, [0, self.ends[i] - math.floor(task['due_time'] * TIME + 1e-7)])
-            tardiness.append(3 * task['priority'] / TIME * late)
+            tardiness.append(c['tardiness'] * task['priority'] / TIME * late)
         fixed_energy = sum(max(0, a['energy']) for a in base.actions)
         fixed_wait = sum(a['end_time']-a['start_time'] for a in base.actions if a['action'].endswith('_wait'))
-        fixed_late = sum(3*t['priority']*t['tardiness'] for t in base.results)
-        m.minimize(makespan * (1 / TIME) + sum(tardiness) + .5 / TIME * sum(self.waits) + 2 / SOC * sum(self.energy)
-                   + 2*fixed_energy + .5*fixed_wait + fixed_late)
+        fixed_late = sum(t['priority']*t['tardiness'] for t in base.results)
+        # Same normalised J as the reports: coefficient w_k / FCFS reference_k per unit of each term.
+        m.minimize(c['makespan'] / TIME * makespan + sum(tardiness) + c['wait'] / TIME * sum(self.waits)
+                   + c['energy'] / SOC * sum(self.energy)
+                   + c['energy']*fixed_energy + c['wait']*fixed_wait + c['tardiness']*fixed_late)
         self.hint_feasible = False
         if hint:
             self.hint_feasible = self.seed_schedule(hint)
@@ -402,11 +408,8 @@ class JointModel:
         return plan
 
 
-def score(plan):
-    from simulator import objective
-    waits = sum(a['end_time']-a['start_time'] for a in plan.actions if a['action'].endswith('_wait'))
-    return objective(plan.results, max([t['completion_time'] for t in plan.results]+[0]), waits,
-                     sum(max(0, a['energy']) for a in plan.actions))
+def score(plan, norm):
+    return objective(objective_terms(plan), norm)
 
 
 def solve(base, tasks, opts, rolling=False):
@@ -428,7 +431,7 @@ def solve(base, tasks, opts, rolling=False):
     metadata = dict(status=solver.status_name(status), objective=solver.objective_value if feasible else None,
                     best_bound=solver.best_objective_bound if status != cp_model.MODEL_INVALID else None,
                     wall_time=solver.wall_time, deterministic_time=solver.response_proto.deterministic_time,
-                    num_solves=1, fallback=None, proof_scope='finite charge-visit, integer-grid model', hint_objective=score(hint) if hint else None,
+                    num_solves=1, fallback=None, proof_scope='finite charge-visit, integer-grid model', hint_objective=score(hint, opts['norm']) if hint else None,
                     hint_error=hint_error, grid_hint=joint.hint_feasible, workers=opts['workers'], seed=opts['seed'])
     cap = opts['max_charges_per_robot']
     selected = hint if cap is None or all(sum(j['key'] is None for j in jobs) <= cap for jobs in joint.trace) else None
@@ -436,14 +439,14 @@ def solve(base, tasks, opts, rolling=False):
         stage = 'decoder'
         try:
             decoded = joint.decode(solver)
-            build_result(decoded, base.results + tasks, 'cpsat', started)
+            build_result(decoded, base.results + tasks, 'cpsat', started, opts['norm'])
             if rolling:
                 stage = 'terminal reserve'
                 active = {t['robot_id'] for t in decoded.results[len(base.results):]}
                 for k in range(4):
                     if decoded.robots[k]['robot_id'] in active:
                         decoded.ensure_reserve(k)
-            if selected is None or score(decoded) <= score(selected) + 1e-7:
+            if selected is None or score(decoded, opts['norm']) <= score(selected, opts['norm']) + 1e-7:
                 selected = decoded
             else:
                 metadata['fallback'] = 'joint hint has a lower decoded objective'
@@ -455,11 +458,11 @@ def solve(base, tasks, opts, rolling=False):
             raise RuntimeError('Invalid CP-SAT model: ' + joint.model.validate())
     if selected is None:
         raise InputError('No energy-safe optimizer schedule found. ' + (hint_error or metadata['status']))
-    actual = score(selected)
+    actual = score(selected, opts['norm'])
     metadata['decoded_objective'] = actual
     metadata['objective_difference'] = actual - metadata['objective'] if feasible else None
     metadata['decoded_differs'] = abs(metadata['objective_difference']) > 1e-5 if feasible else None
-    metadata['gap'] = max(0, (metadata['objective']-metadata['best_bound']) / max(1, abs(metadata['objective']))) if feasible else None
+    metadata['gap'] = max(0, (metadata['objective']-metadata['best_bound']) / max(1e-9, abs(metadata['objective']))) if feasible else None
     metadata['elapsed'] = time.perf_counter()-started
     return selected, metadata
 
@@ -469,12 +472,13 @@ def optimize(tasks, config=None, strategy='cpsat', world=None, options=None):
     tasks = validate_tasks(tasks)
     cfg = Config.parse(config or {})
     opts = options_for(options, strategy == 'rolling')
+    opts['norm'] = normaliser(tasks, cfg, world)
     base = Planner(cfg, world)
     if strategy == 'cpsat':
         plan, metadata = solve(base, tasks, opts)
     else:
         plan, metadata = rolling_plan(base, tasks, opts)
-    result = build_result(plan, tasks, strategy, started)
+    result = build_result(plan, tasks, strategy, started, opts['norm'])
     result['solver'] = metadata
     return result
 
@@ -541,10 +545,10 @@ def rolling_plan(base, tasks, opts):
         history.append(info)
         tick += period
     last_objective = history[-1]['objective']
-    difference = score(base)-last_objective if last_objective is not None else None
+    difference = score(base, opts['norm'])-last_objective if last_objective is not None else None
     metadata = dict(status='ROLLING', objective=last_objective, best_bound=None, gap=None,
                     wall_time=sum(h['wall_time'] for h in history), num_solves=len(history),
-                    decoded_objective=score(base), decoded_differs=abs(difference)>1e-5 if difference is not None else None,
+                    decoded_objective=score(base, opts['norm']), decoded_differs=abs(difference)>1e-5 if difference is not None else None,
                     objective_difference=difference,
                     fallback_count=sum(h['fallback'] is not None for h in history), replans=history,
                     workers=opts['workers'], seed=opts['seed'])

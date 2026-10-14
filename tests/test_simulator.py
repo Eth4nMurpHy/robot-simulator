@@ -1,6 +1,6 @@
 import copy
 import unittest
-from simulator import Config, InputError, STRATEGIES, generate_tasks, objective, random_robot_soc, simulate, slot, validate_result, validate_tasks
+from simulator import Config, InputError, STRATEGIES, generate_tasks, normaliser, objective, random_robot_soc, simulate, slot, validate_result, validate_tasks
 
 
 def simple_task(**changes):
@@ -160,11 +160,21 @@ class SimulatorTests(unittest.TestCase):
         # Stage 1 balances work on nominal times only, so both robots of each loop are used.
         self.assertEqual({t['robot_id'] for t in result['tasks']}, {'R1', 'R2', 'R3', 'R4'})
 
-    def test_objective_matches_summary(self):
-        result = simulate(generate_tasks(20, 3), {}, 'joint')
-        s = result['summary']
-        self.assertAlmostEqual(s['objective'], objective(result['tasks'], s['makespan'], s['cross_wait'] + s['charge_wait'], s['energy']))
-        self.assertAlmostEqual(objective([dict(priority=2, tardiness=10)], 100, 20, 5), 100 + 3 * 20 + 10 + 10)
+    def test_objective_is_normalised_by_fcfs(self):
+        tasks = generate_tasks(40, 1)
+        fcfs, joint = simulate(tasks, {}, 'fcfs')['summary'], simulate(tasks, {}, 'joint')['summary']
+        self.assertAlmostEqual(fcfs['objective'], 1)  # every FCFS term is above its floor here
+        self.assertEqual(joint['objective_reference'], dict(strategy='fcfs', terms=fcfs['objective_terms']))
+        terms, ref = joint['objective_terms'], fcfs['objective_terms']
+        self.assertAlmostEqual(terms['makespan'], joint['makespan'])
+        self.assertAlmostEqual(terms['wait'], joint['cross_wait'] + joint['charge_wait'])
+        expected = sum(.25 * terms[k] / max(ref[k], floor) for k, floor in
+                       (('makespan', 1), ('tardiness', 60), ('wait', 60), ('energy', 1)))
+        self.assertAlmostEqual(joint['objective'], expected)
+        # Floors keep a zero reference term (one easy task: no lateness or queueing) finite.
+        norm = normaliser([simple_task()], Config())
+        self.assertEqual(norm['coefficients']['tardiness'], .25 / 60)
+        self.assertAlmostEqual(objective(dict(makespan=50, tardiness=0, wait=0, energy=3), norm), .5)
 
 
 if __name__ == '__main__':

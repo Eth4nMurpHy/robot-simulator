@@ -38,15 +38,17 @@ def instance(setting, seed):
 
 
 def run(job):
-    experiment, label, setting, strategy, seed, options = job
-    tasks, config = instance(setting, seed)
-    row = dict(experiment=experiment, setting=label, strategy=strategy, seed=seed, tasks=len(tasks), status='ok', message='')
+    setting, strategy, seed, options = job
+    tasks, config = instance(dict(setting), seed)
+    row = dict(strategy=strategy, seed=seed, tasks=len(tasks), status='ok', message='')
     started = time.perf_counter()
     try:
-        result = simulate(tasks, config, strategy, None, options if strategy in OPTIMIZERS else None)
+        result = simulate(tasks, config, strategy, None, options.get(strategy))
         row.update({k: result['summary'][k] for k in METRICS})
+        row.update({f'term_{k}': v for k, v in result['summary']['objective_terms'].items()})
         solver = result.get('solver') or {}
-        row.update(solver_status=solver.get('status', ''), gap=solver.get('gap', ''))
+        row.update(solver_status=solver.get('status', ''), gap=solver.get('gap', ''),
+                   fallbacks=solver.get('fallback_count', int(bool(solver.get('fallback')))) if solver else '')
     except (InputError, RuntimeError) as exc:
         # A heuristic that cannot keep every robot above the safety SOC is an "energy deadlock".
         row.update(status='failed', message=str(exc)[:200], runtime=time.perf_counter() - started)
@@ -89,8 +91,9 @@ def write_csv(path, rows):
 
 def markdown(summary, strategies):
     lines = ['# Experiment results', '',
-             'Mean ± std over seeds; J is the report objective (lower is better). "J vs FCFS" is the mean paired change',
-             'against FCFS on the same instance. Failures = runs with no safe schedule.', '']
+             'Mean ± std over seeds. J is the normalised objective (each term divided by the FCFS value on the same',
+             'instance, equal weights; FCFS = 1, lower is better). "J vs FCFS" is the mean paired change against FCFS.',
+             'Failures = runs with no safe schedule.', '']
     for experiment in dict.fromkeys(s['experiment'] for s in summary):
         lines += [f'## {experiment}', '', '| Setting | Strategy | J | J vs FCFS | Makespan (s) | Late rate | Tardiness (s) | X wait (s) | Charge wait (s) | Energy (%) | Runtime (s) | Failures |',
                   '|---|---|---|---|---|---|---|---|---|---|---|---|']
@@ -98,7 +101,7 @@ def markdown(summary, strategies):
             if s['experiment'] != experiment:
                 continue
             f = lambda k, d=0: f"{s[k + '_mean']:.{d}f} ± {s[k + '_std']:.{d}f}"
-            lines.append(f"| {s['setting']} | {s['strategy']} | {f('objective')} | {s['j_vs_fcfs_mean'] * 100:+.1f}% | {f('makespan')} | {s['tardiness_rate_mean']:.2f} | "
+            lines.append(f"| {s['setting']} | {s['strategy']} | {f('objective', 3)} | {s['j_vs_fcfs_mean'] * 100:+.1f}% | {f('makespan')} | {s['tardiness_rate_mean']:.2f} | "
                          f"{f('total_tardiness')} | {f('cross_wait', 1)} | {f('charge_wait')} | {f('energy', 1)} | {s['runtime_mean']:.2f} | {s['failures']}/{s['runs']} |")
         lines.append('')
     return '\n'.join(lines)
@@ -151,25 +154,37 @@ def main():
     parser.add_argument('--first-seed', type=int, default=1)
     parser.add_argument('--strategies', nargs='+', default=[*STRATEGIES, *OPTIMIZERS])
     parser.add_argument('--experiments', nargs='+', default=list(dict.fromkeys(e for e, _, _ in EXPERIMENTS)))
-    parser.add_argument('--time-limit', type=float, default=30, help='CP-SAT seconds per offline solve')
-    parser.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2))
+    parser.add_argument('--time-limit', type=float, default=120, help='CP-SAT wall seconds per offline solve')
+    parser.add_argument('--workers', type=int, default=min(8, os.cpu_count() or 1), help='CP-SAT workers (offline)')
+    parser.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2), help='parallel heuristic/rolling runs')
     parser.add_argument('--out', default='results')
     args = parser.parse_args()
     unknown = set(args.strategies) - {*STRATEGIES, *OPTIMIZERS}
     if unknown:
         parser.error('Unknown or unavailable strategies: ' + ', '.join(sorted(unknown)))
-    options = dict(time_limit=args.time_limit, workers=1)
-    jobs = [(e, label, {**BASE, **override}, s, seed, options)
-            for e, label, override in EXPERIMENTS if e in args.experiments
-            for seed in range(args.first_seed, args.first_seed + args.seeds) for s in args.strategies]
+    options = dict(cpsat=dict(time_limit=args.time_limit, workers=args.workers))
+    groups = [(e, label, {**BASE, **override}) for e, label, override in EXPERIMENTS if e in args.experiments]
+    seeds = range(args.first_seed, args.first_seed + args.seeds)
+    # The base setting recurs in several experiments: solve each distinct instance once.
+    unique = list(dict.fromkeys((tuple(sorted(setting.items())), s, seed)
+                                for _, _, setting in groups for s in args.strategies for seed in seeds))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    rows = []
+    done = {}
+
+    def record(key, row):
+        done[key] = row
+        print(f"[{len(done)}/{len(unique)}] {dict(key[0])} {row['strategy']:<9} seed {row['seed']:<3} "
+              + (f"J={row['objective']:.3f} ({row['runtime']:.1f}s)" if row['status'] == 'ok' else 'FAILED ' + row['message']), flush=True)
+
+    light = [k for k in unique if k[1] != 'cpsat']
     with ProcessPoolExecutor(args.jobs) as pool:
-        for i, row in enumerate(pool.map(run, jobs), 1):
-            rows.append(row)
-            print(f"[{i}/{len(jobs)}] {row['experiment']:<10} {row['setting']:<14} {row['strategy']:<9} seed {row['seed']:<3} "
-                  + (f"J={row['objective']:.0f}" if row['status'] == 'ok' else 'FAILED'), flush=True)
+        for key, row in zip(light, pool.map(run, [(*k, options) for k in light])):
+            record(key, row)
+    for key in (k for k in unique if k[1] == 'cpsat'):  # one at a time: CP-SAT uses its own workers
+        record(key, run((*key, options)))
+    rows = [dict(experiment=e, setting=label, **done[(tuple(sorted(setting.items())), s, seed)])
+            for e, label, setting in groups for seed in seeds for s in args.strategies]
     add_relative(rows)
     summary = summarise(rows)
     write_csv(out / 'runs.csv', rows)
