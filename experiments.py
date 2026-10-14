@@ -97,7 +97,8 @@ def write_csv(path, rows):
 def markdown(summary, strategies):
     lines = ['# Experiment results', '',
              'Mean ± std over seeds. J is the normalised objective (each term divided by the FCFS value on the same',
-             'instance, equal weights; FCFS = 1, lower is better). "J vs FCFS" is the mean paired change against FCFS.',
+             'instance, equal weights; FCFS = 1 unless one of its terms is below its floor, lower is better).',
+             '"J vs FCFS" is the paired change against FCFS on the same instance.',
              'Medians are given because J is sensitive to near-zero FCFS terms (see the floors in README).',
              'Failures = runs with no safe schedule.', '']
     for experiment in dict.fromkeys(s['experiment'] for s in summary):
@@ -181,10 +182,14 @@ def main():
     groups = [(e, label, {**BASE, **override}) for e, label, override in EXPERIMENTS if e in args.experiments]
     seeds = range(args.first_seed, args.first_seed + args.seeds)
     # The base setting recurs in several experiments: solve each distinct instance once.
-    unique = list(dict.fromkeys((tuple(sorted(setting.items())), s, seed)
-                                for _, _, setting in groups for s in args.strategies for seed in seeds))
-    shard, shards = map(int, args.shard.split('/'))
-    unique = unique[shard::shards]
+    try:
+        shard, shards = map(int, args.shard.split('/'))
+        assert 0 <= shard < shards
+    except (ValueError, AssertionError):
+        parser.error('--shard must be K/N with 0 <= K < N')
+    # Shard distinct instances (setting, seed), not runs, so every strategy of an instance stays together.
+    instances = list(dict.fromkeys((tuple(sorted(setting.items())), seed) for _, _, setting in groups for seed in seeds))
+    unique = [(inst, s, seed) for inst, seed in instances[shard::shards] for s in args.strategies]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     done = {}

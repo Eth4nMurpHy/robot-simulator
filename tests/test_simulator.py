@@ -209,7 +209,7 @@ class SimulatorTests(unittest.TestCase):
         ghost = copy.deepcopy(result)
         for item in ghost['actions'] + ghost['tasks']:
             item['robot_id'] = 'R9'
-        self.assertIn('Robot roster must be exactly R1-R4 and every task/action must use it', validate_result(ghost))
+        self.assertIn('Robot roster must be exactly R1-R4 (loops A, A, B, B from A1/B1) and every task/action must use it', validate_result(ghost))
         linger = copy.deepcopy(result)
         cross = next(a for a in linger['actions'] if a['action'] == 'cross')
         for a in linger['actions']:
@@ -236,6 +236,28 @@ class SimulatorTests(unittest.TestCase):
         disabled = copy.deepcopy(two_bays)
         disabled['config']['chargers'] = 1
         self.assertIn('Robot entered a disabled charging bay', validate_result(disabled))
+
+    def test_validator_rejects_forged_metadata_and_shared_parking(self):
+        result = simulate([simple_task()], strategy='fcfs')
+        swapped = copy.deepcopy(result)
+        swapped['robots'][0].update(loop='B', start_node='B1')
+        self.assertIn('Robot roster must be exactly R1-R4 (loops A, A, B, B from A1/B1) and every task/action must use it', validate_result(swapped))
+        from command_plan import execute_commands
+        plan = dict(name='park', commands=[dict(robot_id='R1', at=0, action='move_to', node='C1'),
+                                            dict(robot_id='R2', at=200, action='wait', duration=1)])
+        parked = execute_commands([], {}, None, plan)
+        r1 = [a for a in parked['actions'] if a['robot_id'] == 'R1']
+        arrival = max(a['end_time'] for a in r1)
+        # Forge R2 into the same bay exactly when the trace ends, with bay reservations removed.
+        forged = copy.deepcopy(parked)
+        r2 = next(a for a in forged['actions'] if a['robot_id'] == 'R2')
+        forged['actions'].remove(r2)
+        for a in [a for a in parked['actions'] if a['robot_id'] == 'R1']:
+            b = dict(a, robot_id='R2', start_time=a['start_time'] + 300, end_time=a['end_time'] + 300, command_index=99)
+            forged['actions'].append(b)
+        forged['reservations'] = {'X': forged['reservations']['X'] + [a for a in forged['actions'] if a['robot_id'] == 'R2' and a['action'] == 'cross'], 'C1': [], 'C2': []}
+        self.assertGreater(max(a['end_time'] for a in forged['actions']), arrival)
+        self.assertIn('C1: physically overlapping use', validate_result(forged))
 
     def test_min_soc_counts_idle_robots(self):
         result = simulate([simple_task()], {'robot_soc': [100, 40, 40, 40]}, 'fcfs')

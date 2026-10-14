@@ -1,7 +1,8 @@
 # Experiment results
 
 Mean ± std over seeds. J is the normalised objective (each term divided by the FCFS value on the same
-instance, equal weights; FCFS = 1, lower is better). "J vs FCFS" is the mean paired change against FCFS.
+instance, equal weights; FCFS = 1 unless one of its terms is below its floor, lower is better).
+"J vs FCFS" is the paired change against FCFS on the same instance.
 Medians are given because J is sensitive to near-zero FCFS terms (see the floors in README).
 Failures = runs with no safe schedule.
 

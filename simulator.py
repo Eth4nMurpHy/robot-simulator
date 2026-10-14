@@ -1,5 +1,6 @@
 """Deterministic discrete-event reservation simulator. Times are seconds, SOC percent."""
 from __future__ import annotations
+import math
 import random
 import time
 from dataclasses import dataclass, asdict, replace
@@ -395,8 +396,9 @@ def validate_result(result):
         if any((a.get('open_ended', False) or a['end_time'] + gap > b['start_time'] + 1e-8) for a, b in zip(ordered, ordered[1:])):
             errors.append(f'{resource}: overlapping reservations')
     roster = [r['robot_id'] for r in result['robots']]
-    if roster != ['R1', 'R2', 'R3', 'R4'] or any(x['robot_id'] not in roster for x in result['actions'] + completed):
-        errors.append('Robot roster must be exactly R1-R4 and every task/action must use it')
+    if (roster != ['R1', 'R2', 'R3', 'R4'] or any(x['robot_id'] not in roster for x in result['actions'] + completed)
+            or [(r['loop'], r['start_node']) for r in result['robots']] != [('A', 'A1'), ('A', 'A1'), ('B', 'B1'), ('B', 'B1')]):
+        errors.append('Robot roster must be exactly R1-R4 (loops A, A, B, B from A1/B1) and every task/action must use it')
     bays = {f'C{i + 1}' for i in range(int(cfg['chargers']))}
     if any(a['to_node'].startswith('C') and a['to_node'] not in bays for a in result['actions']):
         errors.append('Robot entered a disabled charging bay')
@@ -413,7 +415,7 @@ def validate_result(result):
                     errors.append(f'{rid}: does not leave X immediately after crossing')
             if a['to_node'] in bays and a['from_node'] != a['to_node']:
                 leave = next((b for b in trace[i + 1:] if b['from_node'] == a['to_node'] and b['to_node'] != a['to_node']), None)
-                occupancy[a['to_node']].append((a['end_time'], leave['start_time'] if leave else horizon))
+                occupancy[a['to_node']].append((a['end_time'], leave['start_time'] if leave else math.inf))  # parked: open-ended
     for resource, uses in occupancy.items():
         gap = 2 * cfg['buffer_seconds'] if resource == 'X' else 0
         if any(a[1] + gap > b[0] + 1e-8 for a, b in zip(sorted(uses), sorted(uses)[1:])):
