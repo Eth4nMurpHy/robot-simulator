@@ -9,6 +9,10 @@ from simulator_types import InputError, number
 
 TIME = 1000
 SOC = 60_000_000
+# The optimum drives terminal SOC exactly onto the reserve boundary; the simulator's reserve check also
+# drains while queueing for X on the way to H, which the model ignores. 0.5 % (about 150 s of queue
+# drain) keeps decoded plans from being rejected by a hair.
+RESERVE_MARGIN = .5
 
 
 def ceil_int(value):
@@ -210,7 +214,7 @@ class JointModel:
                         continue
                     reserve = sum(self.metrics(*e)[1] for e in route(robot['loop'], node['location'], 'X'))
                     reserve += self.metrics('X', 'H')[1] + min(self.metrics('H', b)[1] for b in sorted(self.resources) if b != 'X')
-                    reserve += ceil_int(3 * (self.cfg.charge_target-self.cfg.safety_soc) / self.cfg.charge_per_min * self.cfg.wait_energy_per_min * SOC)
+                    reserve += ceil_int((3 * (self.cfg.charge_target-self.cfg.safety_soc) / self.cfg.charge_per_min * self.cfg.wait_energy_per_min + RESERVE_MARGIN) * SOC)
                     m.add(node['soc'] >= self.safe + reserve).only_enforce_if(details[a, 0]['use'])
             self.nodes.append(nodes)
             self.arcs.append(details)

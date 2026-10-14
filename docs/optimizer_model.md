@@ -147,7 +147,10 @@ as well. Initial SOC is robot-specific. Standby costs zero. Offline scheduling
 requires the same terminal reserve by default (`terminal_reserve=True`): the last
 task of every robot must leave enough energy to travel to a bay, including the
 heuristic's conservative queue allowance for three other full recharges, and the
-decoded plan must pass `Planner.ensure_reserve` like every heuristic decision.
+decoded plan must pass `Planner.ensure_reserve` like every heuristic decision. The model adds a 0.5 % SOC
+margin: otherwise the optimum ends exactly on the boundary and the simulator's check,
+which also drains while queueing for X on the way to H, rejected about a quarter of
+the decoded plans (they then fell back to the warm start).
 Without it (`terminal_reserve=False`, the `cpsat-nores` ablation) the optimum
 drains batteries to the floor at the horizon and often skips charging entirely,
 which made offline CP-SAT look far better than the heuristics for the wrong reason.
