@@ -160,6 +160,7 @@ def main():
     parser.add_argument('--out', default='results')
     parser.add_argument('--reuse', help='runs.csv of an earlier run: reuse its rows for --reuse-strategies')
     parser.add_argument('--reuse-strategies', nargs='+', default=['cpsat'])
+    parser.add_argument('--shard', default='0/1', help='K/N: run only every N-th distinct instance, offset K (merge with --reuse)')
     args = parser.parse_args()
     unknown = set(args.strategies) - {*STRATEGIES, *OPTIMIZERS}
     if unknown:
@@ -170,6 +171,8 @@ def main():
     # The base setting recurs in several experiments: solve each distinct instance once.
     unique = list(dict.fromkeys((tuple(sorted(setting.items())), s, seed)
                                 for _, _, setting in groups for s in args.strategies for seed in seeds))
+    shard, shards = map(int, args.shard.split('/'))
+    unique = unique[shard::shards]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     done = {}
@@ -197,8 +200,9 @@ def main():
             record(key, row)
     for key in (k for k in unique if k[1] == 'cpsat' and k not in done):  # one at a time: CP-SAT uses its own workers
         record(key, run((*key, options)))
-    rows = [dict(experiment=e, setting=label, **done[(tuple(sorted(setting.items())), s, seed)])
-            for e, label, setting in groups for seed in seeds for s in args.strategies]
+    rows = [dict(experiment=e, setting=label, **done[key])
+            for e, label, setting in groups for seed in seeds for s in args.strategies
+            if (key := (tuple(sorted(setting.items())), s, seed)) in done]
     add_relative(rows)
     summary = summarise(rows)
     write_csv(out / 'runs.csv', rows)
