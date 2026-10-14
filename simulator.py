@@ -2,7 +2,7 @@
 from __future__ import annotations
 import random
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from simulator_types import InputError, number
 from customization import LOOPS, parse_map, parse_rules, edge_metrics, ordered_tasks, custom_score
 
@@ -14,8 +14,8 @@ NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
 # Weights of the report objective J = Cmax + 3*sum(priority_i*T_i) + 0.5*(W_cross + W_charge) + 2*E.
 # Battery safety is a hard constraint enforced by the validator, never a weighted term.
 OBJECTIVE_WEIGHTS = {'makespan': 1, 'tardiness': 3, 'wait': .5, 'energy': 2}
-STRATEGIES = {'fcfs': 'First come, first served', 'deadline': 'Deadline + reservations',
-              'joint': 'Joint greedy scheduling'}
+STRATEGIES = {'fcfs': 'First come, first served', 'staged': 'Staged: assign, then cross, then charge',
+              'deadline': 'Deadline + reservations', 'joint': 'Joint greedy scheduling'}
 
 
 @dataclass
@@ -92,22 +92,39 @@ def validate_tasks(rows):
     return out
 
 
-def generate_tasks(count=40, seed=42, a_share=.5):
+def generate_tasks(count=40, seed=42, a_share=.5, release_gap=12, tight=False, urgent=0):
+    """release_gap: mean seconds between releases; tight: 4-8 min instead of 8-15 min deadlines;
+    urgent: extra share of short-deadline, high-priority orders (U-prefixed) spread over the run."""
     count = number(count, 'count', 1, 200)
     seed = number(seed, 'seed', 0, 2**32 - 1)
     if int(count) != count or int(seed) != seed:
         raise InputError('count and seed must be integers.')
     a_share = number(a_share, 'a_share', 0, 1)
+    release_gap = number(release_gap, 'release_gap', 1, 600)
+    urgent = number(urgent, 'urgent', 0, 1)
+    if int(count) + round(count * urgent) > 200:
+        raise InputError('count plus urgent orders must not exceed 200 tasks.')
     rng = random.Random(int(seed))
+    window = max(1, int(count * release_gap))
     tasks = []
     for i in range(int(count)):
         area = 'A' if rng.random() < a_share else 'B'
         pickup, dropoff = rng.sample(range(1, 5), 2)
-        release = rng.randrange(0, max(1, int(count) * 12), 10)
+        release = rng.randrange(0, window, 10)
         tasks.append(dict(task_id=f'T{i + 1:03}', release_time=release,
                           pickup=f'{area}{pickup}', dropoff=f'{area}{dropoff}',
                           load_time=rng.choice([10, 15, 20]), unload_time=rng.choice([10, 15, 20]),
-                          due_time=release + rng.randint(480, 900), priority=rng.choice([1, 1, 2, 3])))
+                          due_time=release + (rng.randint(240, 480) if tight else rng.randint(480, 900)),
+                          priority=rng.choice([1, 1, 2, 3])))
+    # Separate stream: adding urgent orders never changes the base workload of the same seed.
+    rush = random.Random(f'urgent-{int(seed)}')
+    for i in range(round(count * urgent)):
+        area = 'A' if rush.random() < a_share else 'B'
+        pickup, dropoff = rush.sample(range(1, 5), 2)
+        release = rush.randrange(0, window, 10)
+        tasks.append(dict(task_id=f'U{i + 1:03}', release_time=release, pickup=f'{area}{pickup}',
+                          dropoff=f'{area}{dropoff}', load_time=10, unload_time=10,
+                          due_time=release + rush.randint(180, 360), priority=rush.choice([4, 5])))
     return sorted(tasks, key=lambda t: (t['release_time'], t['task_id']))
 
 
@@ -288,6 +305,27 @@ class Planner:
         return plan
 
 
+def staged(plan, tasks):
+    """Baseline 2: decide assignment first, then intersection slots, and charging last."""
+    # Stage 1 ignores X, chargers and battery: list scheduling on nominal travel times.
+    nominal = Planner(replace(plan.c, safety_soc=-1e9), plan.world)
+    order = []
+    for task in sorted(tasks, key=lambda t: (t['release_time'], t['task_id'])):
+        trials = []
+        for i, robot in enumerate(nominal.robots):
+            if robot['loop'] == task['pickup'][0]:
+                trial = nominal.clone()
+                trial.calendars['X'] = []
+                trial.task(trial.robots[i], task)
+                trials.append((trial.robots[i]['time'], robot['robot_id'], i, trial))
+        _, _, i, nominal = min(trials, key=lambda x: x[:2])
+        order.append((nominal.results[-1]['start_time'], task['task_id'], i, task))
+    # Stages 2-3: book X on that fixed assignment, inserting a charge only when the task is unsafe.
+    for _, _, i, task in sorted(order, key=lambda x: x[:2]):
+        plan = plan.candidate(i, task, 'staged')
+    return plan
+
+
 def validate_result(result):
     """Independent checks of returned task/action/resource records, not planner state."""
     errors = []
@@ -394,7 +432,9 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
     if rules:
         cfg.charge_target = rules['charge_target']
     plan = Planner(cfg, world, rules)
-    pending = list(tasks)
+    pending = [] if strategy == 'staged' else list(tasks)
+    if strategy == 'staged':
+        plan = staged(plan, tasks)
     while pending:
         # Joint heuristic chooses among the next 8 released/future jobs; no optimality claim.
         if rules:

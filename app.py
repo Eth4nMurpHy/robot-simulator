@@ -4,7 +4,7 @@ import json
 import logging
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from simulator import InputError, generate_tasks, simulate
+from simulator import InputError, generate_tasks, random_robot_soc, simulate
 from customization import default_map, parse_map
 from command_plan import DEFAULT_COMMAND_PLAN, parse_command_plan, CommandPlanError
 
@@ -41,7 +41,9 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise InputError('Request must be a JSON object.')
             if self.path == '/api/generate':
-                self.json_response({'tasks': generate_tasks(data.get('count', 40), data.get('seed', 42), data.get('a_share', .5))})
+                self.json_response({'tasks': generate_tasks(data.get('count', 40), data.get('seed', 42), data.get('a_share', .5),
+                                                         data.get('release_gap', 12), bool(data.get('tight', False)), data.get('urgent', 0)),
+                                   'robot_soc': random_robot_soc(data.get('seed', 42))})
             elif self.path == '/api/simulate':
                 self.json_response(simulate(data.get('tasks'), data.get('config'), data.get('strategy', 'joint'), data.get('map'), data.get('custom_strategy')))
             elif self.path == '/api/validate-customization':
