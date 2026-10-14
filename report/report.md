@@ -156,6 +156,9 @@ every vertex; tardiness $T_i$ and $C_{\max}$.
 - **Energy:** along every chosen path SOC decreases by the edge, handling and waiting consumption and
   must stay $\ge S_{\min}$ at every vertex; since SOC only decreases between charges, this checks
   every intermediate action.
+- **Terminal reserve:** after its last order every robot must keep enough energy to reach a bay even
+  behind a full queue — the same reserve the heuristics enforce before accepting any order — and the
+  decoded schedule is re-checked with the simulator's own reserve test.
 
 Time is scaled to milliseconds and SOC to integer units, with every duration and consumption rounded
 **up** so that integer-feasible schedules remain feasible in the exact simulator. The objective is
@@ -232,9 +235,12 @@ type (Google Colab high-RAM CPU VMs, 8 vCPU Intel Xeon @ 2.20 GHz, OR-Tools 9.15
 a time.
 
 *Fairness caveats.* The heuristics and offline CP-SAT know the whole order list in advance (but never
-start an order before its release); rolling is the only truly online method. CP-SAT does not need
-spare energy after the last delivery, whereas the heuristics keep a charging reserve and always charge
-to 95 %.
+start an order before its release); rolling is the only truly online method. All strategies end the
+horizon with the same battery reserve (every robot must still be able to reach a charger behind a
+full queue). A first run of offline CP-SAT without that reserve, kept as the ablation `cpsat-nores`,
+drained the batteries to the safety floor at the end and frequently skipped charging altogether (no
+charging at all on any 20-order instance), which inflated its advantage; Section 6 quantifies this.
+The heuristics also always charge to 95 %, whereas CP-SAT chooses the amount.
 
 ## 6. Discussion
 

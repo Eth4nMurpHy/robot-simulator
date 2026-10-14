@@ -118,10 +118,10 @@ Four **heuristics** (standard library only, no optimality claim):
 
 Two **optimizers** (`optimizer.py`, need OR-Tools; formulation in [docs/optimizer_model.md](docs/optimizer_model.md)):
 
-5. **CP-SAT joint optimisation:** one model decides task assignment, per-robot order (circuit constraints), intersection slots (optional intervals in one no-overlap constraint with the buffer), charging visits, bay choice, charging start and amount, with SOC bounds after every event. It minimises the normalised objective J below, is warm-started with the joint greedy schedule, and is realised through the same simulator and validator, so it never returns a schedule worse than that warm start. Default 60 s wall time with up to 8 parallel workers (the dashboard default is 20 s); parallel search is not bit-for-bit reproducible.
+5. **CP-SAT joint optimisation:** one model decides task assignment, per-robot order (circuit constraints), intersection slots (optional intervals in one no-overlap constraint with the buffer), charging visits, bay choice, charging start and amount, with SOC bounds after every event. Like the heuristics, every robot must end the horizon able to reach a charger behind a full queue (`terminal_reserve`, default on); without it the model drains batteries to the safety floor at the end and skips charging. It minimises the normalised objective J below, is warm-started with the joint greedy schedule, and is realised through the same simulator and validator, so it never returns a schedule worse than that warm start. Default 60 s wall time with up to 8 parallel workers (the dashboard default is 20 s); parallel search is not bit-for-bit reproducible.
 6. **Rolling-horizon CP-SAT:** a task is invisible until its release time. Every 60 s the known, unstarted tasks within about 10 min of work are re-optimised (single worker; a deterministic budget of 0.1 per solve, about 0.5 s, binds instead of wall time, so results are identical on any machine); actions that start before the next re-plan are committed and their reservations frozen. Results report the number of re-plans and how often the heuristic incumbent was kept.
 
-Options for the optimizers are passed as the fifth `simulate()` argument, e.g. `simulate(tasks, config, 'cpsat', None, {'time_limit': 30, 'workers': 8})`.
+Options for the optimizers are passed as the fifth `simulate()` argument, e.g. `simulate(tasks, config, 'cpsat', None, {'time_limit': 30, 'workers': 8})`; `{'terminal_reserve': False}` removes the end-of-horizon reserve (offline CP-SAT only).
 
 Each loop follows `X → 1 → 2 → 3 → 4 → W → X`. Charging branches from X through H to a bay. The bay is vacated immediately after charging; robots return through H and X. With default settings, ordinary edges use the global travel time/energy and crossings use their own duration. With an applied map, every edge uses its physical length, robot speed, and energy per meter.
 
@@ -146,7 +146,7 @@ Export full results as JSON (tasks, configuration, actions, events, reservations
 
 ## Experiments
 
-`experiments.py` runs the proposal's experiment plan on repeated seeds with identical inputs for every strategy: algorithm comparison, load (20/40/60 tasks), chargers (1/2), zone imbalance (1:1, 2:1, 3:1), safety threshold (10/20/30 %) and dynamic urgent orders (+0/10/20 %). All runs use seeded random initial SOC.
+`experiments.py` runs the proposal's experiment plan on repeated seeds with identical inputs for every strategy (plus `cpsat-nores`, an ablation of CP-SAT without the terminal reserve): algorithm comparison, load (20/40/60 tasks), chargers (1/2), zone imbalance (1:1, 2:1, 3:1), safety threshold (10/20/30 %) and dynamic urgent orders (+0/10/20 %). All runs use seeded random initial SOC.
 
 ```bash
 .venv/bin/python experiments.py --seeds 10 --time-limit 120 --out results

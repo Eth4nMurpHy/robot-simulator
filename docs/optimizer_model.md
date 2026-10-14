@@ -144,10 +144,14 @@ SOC variables stay in $[S_{min},100]$, with a separate lower bound immediately
 before charging. Between replenishments SOC only decreases, so checking the
 ends of incoming travel and internal service checks every intermediate action
 as well. Initial SOC is robot-specific. Standby costs zero. Offline scheduling
-does not require spare energy after the final delivery. Online terminal tasks
-add enough reserve to travel to a bay, including the heuristic's conservative
-queue allowance for three other full recharges; decoded online candidates also
-undergo `Planner.ensure_reserve`. This is stronger than physical safety alone
+requires the same terminal reserve by default (`terminal_reserve=True`): the last
+task of every robot must leave enough energy to travel to a bay, including the
+heuristic's conservative queue allowance for three other full recharges, and the
+decoded plan must pass `Planner.ensure_reserve` like every heuristic decision.
+Without it (`terminal_reserve=False`, the `cpsat-nores` ablation) the optimum
+drains batteries to the floor at the horizon and often skips charging entirely,
+which made offline CP-SAT look far better than the heuristics for the wrong reason.
+Online solves always use the reserve. This is stronger than physical safety alone
 and can sacrifice short-term objective quality to keep later solves usable.
 
 Frozen reservations become mandatory intervals in subsequent online models.
