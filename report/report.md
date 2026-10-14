@@ -63,16 +63,24 @@ the base workload of the same seed. All strategies are evaluated on the identica
 
 ### 2.3 Objective
 
-Following the proposal, all strategies are compared on one scalar objective
+The proposal's objective adds terms with different units: seconds of makespan, seconds of
+priority-weighted lateness, seconds of queueing and percentage points of energy. Under load the
+lateness term reaches tens of thousands of seconds and would swamp everything else. Each term is
+therefore normalised by its value in the FCFS schedule of the same instance and the four normalised
+terms are weighted equally:
 
-$$J = w_1 C_{\max} + w_2 \sum_i p_i T_i + w_3 (W_{\text{cross}} + W_{\text{charge}}) + w_4 E,
-\qquad T_i = \max(0, C_i - d_i)$$
+$$J = \tfrac14\left(\frac{C_{\max}}{\hat R_C} + \frac{\sum_i p_i T_i}{\hat R_T}
++ \frac{W_{\text{cross}} + W_{\text{charge}}}{\hat R_W} + \frac{E}{\hat R_E}\right),
+\qquad T_i = \max(0, C_i - d_i),\quad \hat R_k = \max(R_k^{\text{FCFS}}, f_k)$$
 
-with $w = (1, 3, 0.5, 2)$, where $C_{\max}$ is the completion time of the last order (s), $p_i$ the
-priority, $T_i$ the tardiness (s), $W$ the total intersection and charger queueing time (s) and $E$
-the total energy consumed (% SOC). Battery safety is **not** traded off: falling below the safety
-threshold is a hard constraint, checked by an independent validator, so $N_{\text{unsafe}} = 0$ in
-every reported schedule.
+where $C_{\max}$ is the completion time of the last order (s), $p_i$ the priority, $T_i$ the
+tardiness (s), $W$ the total intersection and charger queueing time (s) and $E$ the total energy
+consumed (% SOC). The floors $f = (1\,\text{s}, 60\,\text{s}, 60\,\text{s}, 1\,\%)$ only matter when
+FCFS has (almost) no lateness or queueing. FCFS therefore scores $J = 1$ (slightly less when one of
+its terms is below the floor), and $J = 0.6$ reads as "40 % better than FCFS on this weighted
+balance". Battery safety is **not** traded off: falling below the safety threshold is a hard
+constraint, checked by an independent validator, so $N_{\text{unsafe}} = 0$ in every reported
+schedule.
 
 ## 3. Simulator
 
@@ -118,11 +126,77 @@ the other three robots.
 
 ### 4.2 CP-SAT joint optimisation
 
-*(to be completed from `docs/optimizer_model.md`)*
+The full formulation is in `docs/optimizer_model.md`; this section summarises it. The key
+observation is that routes are fixed, so for every pair of consecutive jobs of a robot the travel
+time, energy and the **set of crossings of X** are known in advance. Each robot $k$ gets a graph whose
+vertices are a depot (its current state), every order of its loop, and $|Q_k|$ optional charging
+visits.
+
+*Decision variables.* $x_{ik}$ assigns order $i$ to robot $k$; arc literals $a_{kab}$ choose the
+successor of each vertex; $s_i, c_i$ are order start and completion; for each crossing $r$, the entry
+time $e_{kr}$ and the wait $w_{kr}$ in front of X (exit $l_{kr} = e_{kr} + \tau_r$); for each charging
+visit $q$ a presence literal, a bay literal $b_{kqp}$, the H queue $w^C_{kq}$, charging start $u_{kq}$
+and duration $D_{kq}$ (and thus the charged amount); SOC after incoming travel and after service at
+every vertex; tardiness $T_i$ and $C_{\max}$.
+
+*Constraints.*
+
+- **Assignment and order:** $\sum_k x_{ik} = 1$; one `AddCircuit` per robot, with self-loops for
+  absent vertices, so each robot follows a single sequence starting at its depot.
+- **Timing:** if arc $a \to b$ is chosen, $b$ starts after $a$ ends and its arrival follows the
+  fixed path; $s_i \ge r_i$. Idle time between jobs costs no energy, as in the simulator.
+- **Intersection:** every crossing on every arc and inside every order is an optional interval
+  $[e_{kr}, l_{kr} + 2\beta)$, present only if its arc is chosen. All of them share one `NoOverlap`,
+  which enforces both mutual exclusion and the $2\beta$ buffer. The wait $w_{kr}$ happens at the
+  incoming waiting point ($W_A$, $W_B$ or H), never inside X.
+- **Chargers:** for the chosen bay $p$, the bay interval $[u_{kq}, u_{kq} + D_{kq})$ joins that bay's
+  `NoOverlap`; the robot leaves the bay as soon as charging ends. SOC before charging must be
+  $\ge S_{\min}$, and SOC after charging, $S^- + \rho_c D_{kq}$, must be $\le 100$. The charged amount
+  is a decision, unlike the heuristics' fixed 95 % target.
+- **Energy:** along every chosen path SOC decreases by the edge, handling and waiting consumption and
+  must stay $\ge S_{\min}$ at every vertex; since SOC only decreases between charges, this checks
+  every intermediate action.
+
+Time is scaled to milliseconds and SOC to integer units, with every duration and consumption rounded
+**up** so that integer-feasible schedules remain feasible in the exact simulator. The objective is
+exactly the normalised $J$ of Section 2.3, whose references are constants computed before the solve.
+The model is warm-started with the joint greedy schedule (`AddHint`).
+
+*Decoding.* The solver's choices (sequence, crossing entry times, bay, charging start and target SOC)
+are replayed through the simulator's own `Planner`, so times and energy in the returned schedule come
+from the simulator, and the result must pass the independent validator. If the decoded schedule is
+worse than the warm start or fails validation, the warm start is returned and the fallback is
+recorded, so CP-SAT never reports a schedule worse than joint greedy.
+
+*Search.* CP-SAT is run with 8 parallel workers. With a single worker, the solver did not improve the
+warm start on 40-order instances even after about two minutes, while the parallel portfolio, whose
+large-neighbourhood-search workers do most of the work, improved it substantially within the same
+time. On small instances (4–6 orders) the model reaches proven optimality and matches the analytical
+lower bound (unit tests). On realistic sizes the lower bound stays weak (large reported gaps), so the
+results are good incumbents, not proven optima.
 
 ### 4.3 Rolling-horizon re-optimisation
 
-*(to be completed)*
+Offline optimisation assumes all orders are known at time 0. The rolling strategy removes that
+assumption: an order becomes visible only at its release time.
+
+```
+t ← 0
+while orders remain:
+    known ← orders released by t and not yet started
+    window ← known orders, most urgent first, until ≈ 600 s of work per loop
+    plan ← CP-SAT on window from the robots' current states,
+           with all already-committed X and bay reservations as fixed intervals
+           (1 worker, 2 s, deterministic budget; warm start = joint greedy on the window)
+    commit every job of plan that starts before t + 60 s; freeze its reservations
+    t ← t + 60 s
+```
+
+Committed actions are never revised. Each window solve additionally requires the last planned job
+of every robot to leave enough energy to reach a charger even if the bays are busy, so that the next
+window is never left in an energy dead end. The FCFS references used to normalise $J$ are computed
+once from the full instance; they only scale the objective and never expose an individual future
+order to a decision.
 
 ## 5. Experiments
 
