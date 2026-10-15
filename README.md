@@ -4,18 +4,26 @@ A working browser simulator based on the EE6228 M02/M04 proposal: task assignmen
 
 ## Run
 
-Python 3.10+ is the only runtime dependency. No package installation, API key, or external service is needed.
+Python 3.10+ is the only runtime dependency of the simulator, the dashboard and the four heuristics. No API key or external service is needed.
 
 ```bash
-cd /workspace/robot-simulator
 python3 app.py --host 0.0.0.0 --port 8000
+```
+
+The CP-SAT optimizers and the experiment figures additionally need OR-Tools and matplotlib (`requirements.txt`). Use a virtual environment and start the server with its interpreter to enable the two optimizer strategies in the dashboard:
+
+```bash
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py --port 8000
 ```
 
 When running on your own computer, open `http://localhost:8000` in a browser. For cloud tasks, use the platform's supported application access mechanism. The server is a development server; it has no authentication and is not a public production deployment.
 
-The UI loads 40 reproducible tasks using seed 42 and an example command plan (move, then wait). The default mode is **My command plan**. To schedule all generated tasks automatically for a reference experiment, select one of the three automatic examples. Click **Run simulation**, then play, pause, seek, step to the next event, or reset the replay. Task library supports editing and CSV/JSON import. Analytics shows Gantt charts, battery curves, reservations, delivery outcomes, and side-by-side strategy comparisons on an identical input snapshot. The layout adapts to mobile screens.
+The UI loads 40 reproducible tasks using seed 42 and an example command plan (move, then wait). The default mode is **My command plan**. To schedule all generated tasks automatically for a reference experiment, select one of the automatic strategies. Click **Run simulation**, then play, pause, seek, step to the next event, or reset the replay. Task library supports editing and CSV/JSON import. Analytics shows Gantt charts, battery curves, reservations, delivery outcomes, and side-by-side strategy comparisons on an identical input snapshot. The layout adapts to mobile screens.
 
 ## Task input
+
+**Generate** creates a reproducible workload from the seed: count, loop A share, mean release gap (default 12 s per task), optional tight deadlines (release + 4–8 min instead of 8–15 min) and an optional share of urgent orders (`U…` IDs, priority 4–5, due 3–6 min after release). Urgent orders come from a separate random stream, so adding them never changes the base tasks of the same seed. **Random per robot** under Battery gives each robot a seeded initial SOC of 50–100 % (`robot_soc` in the config); otherwise all robots start at the slider value.
 
 See [examples/tasks.csv](examples/tasks.csv) for a ready-to-import 40-task workload. CSV requires the following header; JSON accepts an array of task objects or an object containing a `tasks` array:
 
@@ -97,15 +105,23 @@ Use **My strategy** to add/edit/delete command rows, or import/paste JSON direct
 
 Applied maps and command plans persist in this browser's local storage. Unapplied drafts and task edits are session-only. Maps from the previous rules editor are retained, but old weight-rule JSON is deliberately rejected as a command strategy. Export files for use in another browser/computer. Existing results retain the map and plan used for that run.
 
-## Optional automatic example schedulers
+## Automatic strategies
 
-The event engine uses deterministic, piecewise-linear movement and battery updates. The following automatic examples remain available separately from your command plan. Replay and charts read the returned action log; animation does not run an independent scheduler.
+The event engine uses deterministic, piecewise-linear movement and battery updates. Replay and charts read the returned action log; animation does not run an independent scheduler.
 
-Three **heuristics**, with no global optimality claim:
+Four **heuristics** (standard library only, no optimality claim):
 
 1. **FCFS:** task release order, selecting the compatible robot with the earliest predicted completion. Below 20% SOC, recharge before taking a task; all strategies also apply the stronger safety reserve.
-2. **Deadline + reservations:** earliest deadline first; priority breaks deadline ties. Each candidate includes resource reservations and energy checks.
-3. **Joint greedy:** evaluate up to eight next tasks and both compatible robots. Minimize completion seconds + 3 × priority × lateness seconds + 0.5 × resource wait seconds + 2 × consumed battery percentage points.
+2. **Staged:** assign first, then reserve the intersection, then charge. Assignment is list scheduling on nominal travel times that ignores X, chargers and battery; each robot's fixed sequence is then executed with intersection reservations, and a charge is inserted only when the next task would otherwise be unsafe.
+3. **Deadline + reservations:** earliest deadline first; priority breaks deadline ties. Each candidate includes resource reservations and energy checks.
+4. **Joint greedy:** evaluate up to eight next tasks and both compatible robots. Minimize completion seconds + 3 × priority × lateness seconds + 0.5 × resource wait seconds + 2 × consumed battery percentage points.
+
+Two **optimizers** (`optimizer.py`, need OR-Tools; formulation in [docs/optimizer_model.md](docs/optimizer_model.md)):
+
+5. **CP-SAT joint optimisation:** one model decides task assignment, per-robot order (circuit constraints), intersection slots (optional intervals in one no-overlap constraint with the buffer), charging visits, bay choice, charging start and amount, with SOC bounds after every event. Like the heuristics, every robot that executes orders must end the horizon able to reach a charger behind a full queue (`terminal_reserve`, default on); without it terminal SOC may fall below that reserve, and under load the optimum then often ends near the safety floor and skips charging. It minimises the normalised objective J below, is warm-started with the joint greedy schedule, and is realised through the same simulator and validator, so it never returns a schedule worse than that warm start. Default 60 s wall time with up to 8 parallel workers (the dashboard default is 20 s); parallel search is not bit-for-bit reproducible.
+6. **Rolling-horizon CP-SAT:** a task is invisible until its release time. Every 60 s the known, unstarted tasks within about 10 min of work are re-optimised (single worker; a deterministic budget of 0.1 per solve, about 0.5–1 s, binds instead of the 30 s wall-time cap, so with the same OR-Tools version and options the schedules are identical across machines unless the cap binds); actions that start before the next re-plan are committed and their reservations frozen. Results report the number of re-plans and how often the heuristic incumbent was kept.
+
+Options for the optimizers are passed as the fifth `simulate()` argument, e.g. `simulate(tasks, config, 'cpsat', None, {'time_limit': 30, 'workers': 8})`; `{'terminal_reserve': False}` removes the end-of-horizon reserve (offline CP-SAT only).
 
 Each loop follows `X → 1 → 2 → 3 → 4 → W → X`. Charging branches from X through H to a bay. The bay is vacated immediately after charging; robots return through H and X. With default settings, ordinary edges use the global travel time/energy and crossings use their own duration. With an applied map, every edge uses its physical length, robot speed, and energy per meter.
 
@@ -124,8 +140,20 @@ An independent validator recomputes action energy and checks task uniqueness, pi
 - **Energy:** sum of positive consumption across robots, excluding battery replenishment.
 - **Utilization:** occupied time / makespan; charging divides by bay count as well. In command mode, charging utilization measures bay occupation, including parked time; active charging sessions are separately logged.
 - **Violations:** independent validation errors. Invalid schedules are not returned as successful runs.
+- **Objective J:** `0.25 × (Cmax / Cmax_ref + Σ priority·T / ref + (W_cross + W_charge) / ref + E / E_ref)`, where each reference is the FCFS value on the same instance (floors of 1 s, 60 s, 60 s and 1 % avoid division by zero). FCFS therefore scores 1 (slightly less if one of its terms is below the floor); lower is better. Normalisation stops tardiness seconds from dominating. `objective_terms` and `objective_reference` in the summary give the raw components. Battery safety is a hard constraint, not a term.
 
-Export full results as JSON (tasks, configuration, actions, events, reservations, validation, metrics, and comparisons). Download task, schedule, event log, and summary CSVs individually. Automatic example comparisons contain the three built-ins. Manual command plans are not benchmarked against automatically assigned workloads; their run reports exact commands and unexecuted tasks. Full results also retain the exact map and command plan definition; schedule records and summary include distance in meters. Comparisons use the exact tasks and settings of the most recent successful run, regardless of later UI edits.
+Export full results as JSON (tasks, configuration, actions, events, reservations, validation, metrics, and comparisons). Download task, schedule, event log, robots and summary CSVs individually. Comparisons contain the four heuristics, plus both optimizers when OR-Tools is available (CP-SAT uses the time limit field). Manual command plans are not benchmarked against automatically assigned workloads; their run reports exact commands and unexecuted tasks. Full results also retain the exact map and command plan definition; schedule records and summary include distance in meters. Comparisons use the exact tasks and settings of the most recent successful run, regardless of later UI edits.
+
+## Experiments
+
+`experiments.py` runs the proposal's experiment plan on repeated seeds with identical inputs for every strategy (plus `cpsat-nores`, an ablation of CP-SAT without the terminal reserve): algorithm comparison, load (20/40/60 tasks), chargers (1/2), zone imbalance (1:1, 2:1, 3:1), safety threshold (10/20/30 %) and dynamic urgent orders (+0/10/20 %). All runs use seeded random initial SOC.
+
+```bash
+.venv/bin/python experiments.py --seeds 10 --time-limit 120 --out results
+python3 experiments.py --seeds 3 --strategies fcfs staged deadline joint   # heuristics only, no OR-Tools
+```
+
+It writes `runs.csv` (every run), `summary.csv` (mean, std, median and worst per group, plus the paired change of J against FCFS), `results.md` and PNG figures. Each distinct instance is solved once even if it appears in several experiments; CP-SAT runs one instance at a time with its own workers, the other strategies run in a process pool. A heuristic that cannot keep every robot safe is recorded as a failure (an "energy deadlock"), not dropped.
 
 ## Tests
 
@@ -135,7 +163,7 @@ Required engine and API checks use the standard library:
 python3 -m unittest discover -s tests -v
 ```
 
-The tests include hand-calculated schedules, release/deadline behavior, reproducibility, invalid inputs, battery infeasibility, one-bay congestion, thresholds, unbalanced workloads, 200 tasks, tampered schedules, and functional HTTP requests.
+With `.venv/bin/python` the optimizer tests also run (otherwise they are skipped): proven optima on small chains, charge amounts, fractional maps, determinism, warm-start feasibility and rolling release/commitment audits. The tests include hand-calculated schedules, release/deadline behavior, reproducibility, invalid inputs, battery infeasibility, one-bay congestion, thresholds, unbalanced workloads, 200 tasks, tampered schedules, and functional HTTP requests.
 
 Optional browser checks require Playwright and a Chromium installation. With the server running:
 
@@ -149,6 +177,10 @@ Alternatively install Playwright's browser with `python3 -m playwright install c
 ## Files
 
 - `simulator.py`: world, task generation/validation, reservation calendars, battery model, heuristics, event records, and independent validation.
+- `optimizer.py`: CP-SAT joint model, decoder through the simulator, and rolling-horizon re-planning.
+- `experiments.py`: repeated-seed experiment runner, tables and figures.
+- `docs/optimizer_model.md`: mathematical formulation of the optimizer.
+- `report/`: course report — `report_en.pdf` / `report_zh.pdf` built from `report_en.tex` / `report_zh.tex` with XeLaTeX (e.g. `tectonic report_en.tex`; the Chinese version uses ctex with Noto CJK SC fonts); `report.md` is the plain-text draft. `references.tex` is the shared bibliography. `report/case_study.py` regenerates the worked example (`results/case/`, `results/case_study.png`); `report/capture_ui.py` takes the app screenshots (`results/ui_*.png`) with Playwright while `app.py` runs on port 8765.
 - `command_plan.py`: strict command schema, execution, occupancy tracking, and structured errors.
 - `customization.py`: map schemas and edge metrics (also retains legacy rule helpers for compatibility testing).
 - `simulator_types.py`: shared input validation.
@@ -158,4 +190,4 @@ Alternatively install Playwright's browser with `python3 -m playwright install c
 
 ## Scope
 
-This implements the proposal's minimum version with three built-in scheduling rules, imported JSON command plans, and an edge-length map editor. It does **not** implement CP-SAT, global or rolling optimization, live dynamic orders, nonlinear charging, physical traffic, or repeated-seed statistical reports. Ordinary loop edges are not exclusive; robots may share them, so the safety validator covers the shared intersection/chargers and battery state rather than geometric collision avoidance. All four robots start with the user-selected SOC. Strategy improvements depend on the workload; the UI reports measured results without assuming the joint heuristic always wins.
+Implemented: the proposal's minimum version plus the staged baseline, CP-SAT joint optimisation, rolling-horizon re-optimisation with tasks revealed at release, urgent dynamic orders, per-robot random initial SOC and repeated-seed experiments. Not implemented: nonlinear charging, multiple intersections, a variable number of robots per loop, physical traffic and continuous kinematics. Ordinary loop edges are not exclusive; robots may share them, so the safety validator covers the shared intersection/chargers and battery state rather than geometric collision avoidance. The heuristics see the whole task list in advance (they still never start a task before its release); only the rolling strategy is truly online. Strategy improvements depend on the workload; reported results are measured, not assumed.

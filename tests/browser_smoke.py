@@ -40,8 +40,11 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     page.click('[data-tab="analytics"]')
     expect(page.locator('#gantt svg')).to_be_visible()
     expect(page.locator('#battery-chart svg')).to_be_visible()
+    # Four heuristics, plus CP-SAT and rolling when the server has OR-Tools (short budget here).
+    compared = 6 if page.evaluate('optimizersAvailable') else 4
+    page.evaluate("document.getElementById('time-limit').value = 3")
     page.click('#compare')
-    expect(page.locator('#comparison tbody tr')).to_have_count(3)
+    expect(page.locator('#comparison tbody tr')).to_have_count(compared, timeout=180000)
     if args.screenshots:
         page.screenshot(path=str(Path(args.screenshots) / 'analytics.png'), full_page=True)
     for button, filename, header in [('#export-schedule', 'schedule.csv', 'command_index,robot_id,task_id,action'),
@@ -60,7 +63,7 @@ with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
     download_info.value.save_as(destination)
     exported = json.loads(destination.read_text())
     assert exported['summary']['completed'] == 40
-    assert len(exported['comparison']) == 3
+    assert len(exported['comparison']) == compared
     page.click('[data-tab="tasks"]')
     expect(page.locator('#task-table tbody tr')).to_have_count(40)
     page.fill('#task-search', 'T001')

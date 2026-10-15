@@ -1,10 +1,11 @@
 """Dependency-free local web server for the robot simulator."""
 import argparse
+import importlib.util
 import json
 import logging
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from simulator import InputError, generate_tasks, simulate
+from simulator import OPTIMIZER_STRATEGIES, STRATEGIES, InputError, generate_tasks, random_robot_soc, simulate
 from customization import default_map, parse_map
 from command_plan import DEFAULT_COMMAND_PLAN, parse_command_plan, CommandPlanError
 
@@ -26,7 +27,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/options':
-            self.json_response({'map': default_map(), 'custom_strategy': DEFAULT_COMMAND_PLAN})
+            self.json_response({'map': default_map(), 'custom_strategy': DEFAULT_COMMAND_PLAN,
+                                'optimizers': importlib.util.find_spec('ortools') is not None})
         elif self.path == '/api/health':
             self.json_response({'status': 'ok'})
         else:
@@ -41,7 +43,9 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise InputError('Request must be a JSON object.')
             if self.path == '/api/generate':
-                self.json_response({'tasks': generate_tasks(data.get('count', 40), data.get('seed', 42), data.get('a_share', .5))})
+                self.json_response({'tasks': generate_tasks(data.get('count', 40), data.get('seed', 42), data.get('a_share', .5),
+                                                         data.get('release_gap', 12), bool(data.get('tight', False)), data.get('urgent', 0)),
+                                   'robot_soc': random_robot_soc(data.get('seed', 42))})
             elif self.path == '/api/simulate':
                 self.json_response(simulate(data.get('tasks'), data.get('config'), data.get('strategy', 'joint'), data.get('map'), data.get('custom_strategy')))
             elif self.path == '/api/validate-customization':
@@ -57,11 +61,15 @@ class Handler(SimpleHTTPRequestHandler):
                 self.json_response(output)
             elif self.path == '/api/compare':
                 rows = []
-                strategies = ['fcfs', 'deadline', 'joint']
+                strategies = list(STRATEGIES)
+                if data.get('include_optimizers') and importlib.util.find_spec('ortools'):
+                    strategies += list(OPTIMIZER_STRATEGIES)
                 if data.get('strategy') == 'custom':
                     raise InputError('Command plans do not assign tasks automatically. Compare automatic examples separately.')
                 for strategy in strategies:
-                    result = simulate(data.get('tasks'), data.get('config'), strategy, data.get('map'), data.get('custom_strategy'))
+                    # The request's optimizer options are the offline CP-SAT budget; rolling keeps its defaults.
+                    options = data.get('custom_strategy') if strategy == 'cpsat' else None
+                    result = simulate(data.get('tasks'), data.get('config'), strategy, data.get('map'), options)
                     rows.append({'strategy': strategy, 'label': result['strategy_label'], **result['summary']})
                 self.json_response({'comparison': rows})
             else:

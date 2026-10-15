@@ -46,7 +46,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(result['summary']['completed'], 20)
         self.assertTrue(result['validation']['passed'])
         comparison = self.post('/api/compare', {'tasks': tasks})['comparison']
-        self.assertEqual(len(comparison), 3)
+        self.assertEqual([c['strategy'] for c in comparison], ['fcfs', 'staged', 'deadline', 'joint'])
         self.assertTrue(all(c['completed'] == 20 and c['violations'] == 0 for c in comparison))
 
     def test_customization_validation_and_command_execution(self):

@@ -1,8 +1,9 @@
 """Deterministic discrete-event reservation simulator. Times are seconds, SOC percent."""
 from __future__ import annotations
+import math
 import random
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from simulator_types import InputError, number
 from customization import LOOPS, parse_map, parse_rules, edge_metrics, ordered_tasks, custom_score
 
@@ -11,8 +12,17 @@ NODES = {'X': [500, 270], 'A1': [365, 165], 'A2': [175, 165],
          'B1': [635, 375], 'B2': [825, 375], 'B3': [825, 165],
          'B4': [635, 165], 'WB': [560, 215], 'H': [500, 105],
          'C1': [450, 50], 'C2': [550, 50]}
-STRATEGIES = {'fcfs': 'First come, first served', 'deadline': 'Deadline + reservations',
-              'joint': 'Joint greedy scheduling'}
+# Report objective J = sum_k w_k * term_k / max(reference_k, floor_k) over Cmax, sum(priority_i*T_i),
+# W_cross + W_charge and E. Each term is normalised by the FCFS schedule of the same instance, so no
+# unit (e.g. tardiness seconds) dominates; FCFS scores 1 (less if a term is below its floor, which
+# avoids dividing by a zero reference term). Battery safety is a hard constraint enforced by the validator, never a weighted term.
+OBJECTIVE_WEIGHTS = {'makespan': .25, 'tardiness': .25, 'wait': .25, 'energy': .25}
+OBJECTIVE_FLOORS = {'makespan': 1, 'tardiness': 60, 'wait': 60, 'energy': 1}
+REFERENCE_STRATEGIES = ('fcfs', 'staged', 'deadline')
+STRATEGIES = {'fcfs': 'First come, first served', 'staged': 'Staged: assign, then cross, then charge',
+              'deadline': 'Deadline + reservations', 'joint': 'Joint greedy scheduling'}
+OPTIMIZER_STRATEGIES = {'cpsat': 'CP-SAT joint optimisation',
+                        'rolling': 'Rolling-horizon CP-SAT'}
 
 
 @dataclass
@@ -28,6 +38,10 @@ class Config:
     crossing_seconds: float = 6
     buffer_seconds: float = 2
     charge_target: float = 95
+    robot_soc: list | None = None  # optional per-robot initial SOC for R1-R4; overrides initial_soc
+
+    def start_soc(self, index):
+        return self.robot_soc[index] if self.robot_soc else self.initial_soc
 
     @classmethod
     def parse(cls, data):
@@ -38,10 +52,15 @@ class Config:
                   'wait_energy_per_min': (0, .5), 'handling_energy': (0, 1),
                   'charge_per_min': (3, 8), 'crossing_seconds': (5, 8),
                   'buffer_seconds': (1, 4), 'charge_target': (80, 100)}
-        unknown = set(data) - set(bounds)
+        unknown = set(data) - set(bounds) - {'robot_soc'}
         if unknown:
             raise InputError('Unknown config fields: ' + ', '.join(sorted(unknown)))
-        kwargs = {k: number(v, k, *bounds[k]) for k, v in data.items()}
+        kwargs = {k: number(v, k, *bounds[k]) for k, v in data.items() if k != 'robot_soc'}
+        if data.get('robot_soc') is not None:
+            socs = data['robot_soc']
+            if not isinstance(socs, list) or len(socs) != 4:
+                raise InputError('robot_soc must list four initial SOC values for R1-R4.')
+            kwargs['robot_soc'] = [number(v, f'robot_soc[{i}]', 40, 100) for i, v in enumerate(socs)]
         if 'chargers' in kwargs:
             if kwargs['chargers'] != int(kwargs['chargers']):
                 raise InputError('chargers must be 1 or 2.')
@@ -80,23 +99,77 @@ def validate_tasks(rows):
     return out
 
 
-def generate_tasks(count=40, seed=42, a_share=.5):
+def generate_tasks(count=40, seed=42, a_share=.5, release_gap=12, tight=False, urgent=0):
+    """release_gap: mean seconds between releases; tight: 4-8 min instead of 8-15 min deadlines;
+    urgent: extra share of short-deadline, high-priority orders (U-prefixed) spread over the run."""
     count = number(count, 'count', 1, 200)
     seed = number(seed, 'seed', 0, 2**32 - 1)
     if int(count) != count or int(seed) != seed:
         raise InputError('count and seed must be integers.')
     a_share = number(a_share, 'a_share', 0, 1)
+    release_gap = number(release_gap, 'release_gap', 1, 600)
+    urgent = number(urgent, 'urgent', 0, 1)
+    if int(count) + round(count * urgent) > 200:
+        raise InputError('count plus urgent orders must not exceed 200 tasks.')
+    if count * release_gap > 86400:
+        raise InputError('count × release_gap must not exceed 86,400 s (the latest allowed release time).')
     rng = random.Random(int(seed))
+    window = max(1, int(count * release_gap))
     tasks = []
     for i in range(int(count)):
         area = 'A' if rng.random() < a_share else 'B'
         pickup, dropoff = rng.sample(range(1, 5), 2)
-        release = rng.randrange(0, max(1, int(count) * 12), 10)
+        release = rng.randrange(0, window, 10)
         tasks.append(dict(task_id=f'T{i + 1:03}', release_time=release,
                           pickup=f'{area}{pickup}', dropoff=f'{area}{dropoff}',
                           load_time=rng.choice([10, 15, 20]), unload_time=rng.choice([10, 15, 20]),
-                          due_time=release + rng.randint(480, 900), priority=rng.choice([1, 1, 2, 3])))
+                          due_time=release + (rng.randint(240, 480) if tight else rng.randint(480, 900)),
+                          priority=rng.choice([1, 1, 2, 3])))
+    # Separate stream: adding urgent orders never changes the base workload of the same seed.
+    rush = random.Random(f'urgent-{int(seed)}')
+    for i in range(round(count * urgent)):
+        area = 'A' if rush.random() < a_share else 'B'
+        pickup, dropoff = rush.sample(range(1, 5), 2)
+        release = rush.randrange(0, window, 10)
+        tasks.append(dict(task_id=f'U{i + 1:03}', release_time=release, pickup=f'{area}{pickup}',
+                          dropoff=f'{area}{dropoff}', load_time=10, unload_time=10,
+                          due_time=release + rush.randint(180, 360), priority=rush.choice([4, 5])))
     return sorted(tasks, key=lambda t: (t['release_time'], t['task_id']))
+
+
+def objective_terms(plan):
+    """Raw objective components of a planned schedule (seconds and SOC percentage points)."""
+    return dict(makespan=max([t['completion_time'] for t in plan.results] + [0]),
+                tardiness=sum(t['priority'] * t['tardiness'] for t in plan.results),
+                wait=sum(a['end_time'] - a['start_time'] for a in plan.actions if a['action'] in ('cross_wait', 'charge_wait')),
+                energy=sum(max(0, a['energy']) for a in plan.actions))
+
+
+def objective(terms, norm):
+    return sum(norm['coefficients'][k] * terms[k] for k in OBJECTIVE_WEIGHTS)
+
+
+def normaliser(tasks, cfg, world=None, start=None):
+    """Per-unit coefficients w_k / reference_k from the first baseline that schedules these tasks safely,
+    from an empty plan or, for online use, continuing a partially executed `start` plan."""
+    for strategy in REFERENCE_STRATEGIES:
+        try:
+            plan = start.clone() if start else Planner(cfg, world)
+            reference = objective_terms(staged(plan, tasks) if strategy == 'staged' else plan_tasks(plan, tasks, strategy))
+            break
+        except InputError:
+            continue
+    else:
+        strategy, reference = None, dict(OBJECTIVE_FLOORS)
+    return dict(strategy=strategy, reference=reference,
+                coefficients={k: w / max(reference[k], OBJECTIVE_FLOORS[k]) for k, w in OBJECTIVE_WEIGHTS.items()})
+
+
+def random_robot_soc(seed=42, low=50, high=100):
+    """Reproducible per-robot initial SOC, independent of the task stream for the same seed."""
+    seed = number(seed, 'seed', 0, 2**32 - 1)
+    rng = random.Random(f'soc-{int(seed)}')
+    return [round(rng.uniform(low, high), 1) for _ in range(4)]
 
 
 def slot(calendar, earliest, duration, gap=0):
@@ -116,7 +189,7 @@ class Planner:
         self.world = parse_map(world, config)
         self.rules = rules
         self.robots = [dict(robot_id=f'R{i + 1}', loop=area, node=f'{area}1',
-                            time=0., soc=config.initial_soc) for i, area in enumerate('AABB')]
+                            time=0., soc=config.start_soc(i)) for i, area in enumerate('AABB')]
         self.calendars = {'X': [], **{f'C{i + 1}': [] for i in range(config.chargers)}}
         self.actions = []
         self.results = []
@@ -156,7 +229,11 @@ class Planner:
 
     def crossing(self, r, tid):
         duration, energy, _ = edge_metrics(self.world, r['node'], 'X')
-        start = slot(self.calendars['X'], r['time'], duration, 2 * self.c.buffer_seconds)
+        earliest = r['time']
+        hints = getattr(self, 'crossing_hints', {}).get(r['robot_id'], [])
+        if hints:
+            earliest = max(earliest, hints.pop(0))
+        start = slot(self.calendars['X'], earliest, duration, 2 * self.c.buffer_seconds)
         self.wait(r, start, 'cross_wait', tid)
         item = self.action(r, 'cross', duration, energy,
                            to='X', task_id=tid, resource='X')
@@ -180,32 +257,35 @@ class Planner:
             nxt = loop[(loop.index(r['node']) + 1) % len(loop)]
             self.move_edge(r, nxt, tid)
 
-    def charge(self, r):
+    def charge(self, r, bay_choice=None, target_soc=None, earliest_start=None):
         self.travel(r, 'X')
         self.move_edge(r, 'H', '')
         # Queue at H (outside the bays); account for the travel H -> bay.
+        target = self.c.charge_target if target_soc is None else number(target_soc, 'target_soc', self.c.safety_soc, 100)
+        if bay_choice is not None and bay_choice not in self.calendars.keys() - {'X'}:
+            raise InputError('Unavailable charging bay.')
         rate = self.c.charge_per_min / 60
         drain = self.c.wait_energy_per_min / 60
         choices = []
         for bay, calendar in self.calendars.items():
-            if bay == 'X':
+            if bay == 'X' or (bay_choice is not None and bay != bay_choice):
                 continue
             travel_time, travel_energy, _ = edge_metrics(self.world, 'H', bay)
             arrival = r['time'] + travel_time
             arrival_soc = r['soc'] - travel_energy
-            if arrival_soc < self.c.safety_soc:
+            if arrival_soc < self.c.safety_soc - 1e-8:
                 continue
-            duration = max(0, (self.c.charge_target - arrival_soc) / rate)
-            start = slot(calendar, arrival, duration)
+            duration = max(0, (target - arrival_soc) / rate)
+            start = slot(calendar, max(arrival, earliest_start or 0), duration)
             # Wait increases charging duration. Recompute monotonically until stable.
             for _ in range(len(calendar) + 3):
                 soc = arrival_soc - (start - arrival) * drain
-                duration = max(0, (self.c.charge_target - soc) / rate)
+                duration = max(0, (target - soc) / rate)
                 nxt = slot(calendar, start, duration)
                 if abs(nxt - start) < 1e-8:
                     break
                 start = nxt
-            if soc >= self.c.safety_soc:
+            if soc >= self.c.safety_soc - 1e-8:
                 choices.append((start + duration, start, duration, bay, travel_time))
         if not choices:
             raise InputError('Insufficient energy to reach and queue for a charger safely.')
@@ -263,6 +343,27 @@ class Planner:
         return plan
 
 
+def staged(plan, tasks):
+    """Baseline 2: decide assignment first, then intersection slots, and charging last."""
+    # Stage 1 ignores X, chargers and battery: list scheduling on nominal travel times.
+    nominal = Planner(replace(plan.c, safety_soc=-1e9), plan.world)
+    order = []
+    for task in sorted(tasks, key=lambda t: (t['release_time'], t['task_id'])):
+        trials = []
+        for i, robot in enumerate(nominal.robots):
+            if robot['loop'] == task['pickup'][0]:
+                trial = nominal.clone()
+                trial.calendars['X'] = []
+                trial.task(trial.robots[i], task)
+                trials.append((trial.robots[i]['time'], robot['robot_id'], i, trial))
+        _, _, i, nominal = min(trials, key=lambda x: x[:2])
+        order.append((nominal.results[-1]['start_time'], task['task_id'], i, task))
+    # Stages 2-3: book X on that fixed assignment, inserting a charge only when the task is unsafe.
+    for _, _, i, task in sorted(order, key=lambda x: x[:2]):
+        plan = plan.candidate(i, task, 'staged')
+    return plan
+
+
 def validate_result(result):
     """Independent checks of returned task/action/resource records, not planner state."""
     errors = []
@@ -280,8 +381,13 @@ def validate_result(result):
             continue
         if loads[0]['node'] != task['pickup'] or unloads[0]['node'] != task['dropoff']:
             errors.append(f"{task['task_id']}: wrong station")
-        if loads[0]['end_time'] > unloads[0]['start_time'] + 1e-8 or task['start_time'] < task['release_time']:
+        work = [a for a in actions if a['action'] != 'idle']
+        if (loads[0]['end_time'] > unloads[0]['start_time'] + 1e-8 or task['start_time'] < task['release_time'] - 1e-8
+                or min(a['start_time'] for a in work) < task['release_time'] - 1e-8):
             errors.append(f"{task['task_id']}: precedence/release violation")
+        if (abs(task['completion_time'] - unloads[0]['end_time']) > 1e-6
+                or abs(task['tardiness'] - max(0, unloads[0]['end_time'] - task['due_time'])) > 1e-6):
+            errors.append(f"{task['task_id']}: completion/tardiness does not match the action trace")
         if any(a['robot_id'] != task['robot_id'] for a in actions):
             errors.append(f"{task['task_id']}: inconsistent robot assignment")
     for resource, calendar in result['reservations'].items():
@@ -289,10 +395,46 @@ def validate_result(result):
         gap = 2 * cfg['buffer_seconds'] if resource == 'X' else 0
         if any((a.get('open_ended', False) or a['end_time'] + gap > b['start_time'] + 1e-8) for a, b in zip(ordered, ordered[1:])):
             errors.append(f'{resource}: overlapping reservations')
-    for robot in result['robots']:
+    roster = [r['robot_id'] for r in result['robots']]
+    if (roster != ['R1', 'R2', 'R3', 'R4'] or any(x['robot_id'] not in roster for x in result['actions'] + completed)
+            or [(r['loop'], r['start_node']) for r in result['robots']] != [('A', 'A1'), ('A', 'A1'), ('B', 'B1'), ('B', 'B1')]):
+        errors.append('Robot roster must be exactly R1-R4 (loops A, A, B, B from A1/B1) and every task/action must use it')
+    bays = {f'C{i + 1}' for i in range(int(cfg['chargers']))}
+    if any(a['to_node'].startswith('C') and a['to_node'] not in bays for a in result['actions']):
+        errors.append('Robot entered a disabled charging bay')
+    # Physical occupancy from the trace alone: X from crossing entry to exit, a bay from arrival to
+    # departure (or the end of the trace while parked), whatever the reservation labels say.
+    horizon = max([a['end_time'] for a in result['actions']] + [0])
+    occupancy = {'X': [(a['start_time'], a['end_time']) for a in result['actions'] if a['action'] == 'cross'], **{bay: [] for bay in bays}}
+    for rid in roster:
+        trace = sorted((a for a in result['actions'] if a['robot_id'] == rid), key=lambda a: a['start_time'])
+        for i, a in enumerate(trace):
+            if a['action'] == 'cross':
+                leave = trace[i + 1] if i + 1 < len(trace) else None
+                if leave is None or leave['from_node'] != 'X' or leave['to_node'] == 'X' or abs(leave['start_time'] - a['end_time']) > 1e-6:
+                    errors.append(f'{rid}: does not leave X immediately after crossing')
+            if a['to_node'] in bays and a['from_node'] != a['to_node']:
+                leave = next((b for b in trace[i + 1:] if b['from_node'] == a['to_node'] and b['to_node'] != a['to_node']), None)
+                occupancy[a['to_node']].append((a['end_time'], leave['start_time'] if leave else math.inf))  # parked: open-ended
+    for resource, uses in occupancy.items():
+        gap = 2 * cfg['buffer_seconds'] if resource == 'X' else 0
+        if any(a[1] + gap > b[0] + 1e-8 for a, b in zip(sorted(uses), sorted(uses)[1:])):
+            errors.append(f'{resource}: physically overlapping use')
+    expected_soc = Config.parse(cfg)
+    for index, robot in enumerate(result['robots']):
+        if robot['robot_id'] != f'R{index + 1}' or abs(robot['initial_soc'] - expected_soc.start_soc(index)) > 1e-6:
+            errors.append(f"{robot['robot_id']}: initial SOC does not match the configuration")
         actions = sorted([a for a in result['actions'] if a['robot_id'] == robot['robot_id']], key=lambda a: a['start_time'])
-        last_end, soc, node = 0., cfg['initial_soc'], robot['start_node']
+        last_end, soc, node, carrying = 0., robot['initial_soc'], robot['start_node'], None
         for index, a in enumerate(actions):
+            if a['action'] == 'load':
+                if carrying is not None:
+                    errors.append(f"{robot['robot_id']}: loads a second task while carrying one")
+                carrying = a['task_id']
+            elif a['action'] == 'unload':
+                if carrying != a['task_id']:
+                    errors.append(f"{robot['robot_id']}: unloads a task it is not carrying")
+                carrying = None
             if a['start_time'] < last_end - 1e-8 or a['end_time'] < a['start_time']:
                 errors.append(f"{robot['robot_id']}: overlapping/reversed actions")
             if abs(a['start_soc'] - soc) > 1e-6 or abs(a['end_soc'] - (a['start_soc'] - a['energy'])) > 1e-6:
@@ -313,7 +455,7 @@ def validate_result(result):
                     errors.append(f"{robot['robot_id']}: invalid directed edge")
             elif action == 'cross':
                 edge_time, expected_energy, distance = edge_metrics(world, a['from_node'], a['to_node'])
-                if a['from_node'] not in ('W' + robot['loop'], 'H') or a['to_node'] != 'X' or abs(duration - edge_time) > 1e-6 or abs(a.get('distance_m', distance) - distance) > 1e-6:
+                if a['from_node'] not in ('W' + robot['loop'], 'H') or a['to_node'] != 'X' or a['resource'] != 'X' or abs(duration - edge_time) > 1e-6 or abs(a.get('distance_m', distance) - distance) > 1e-6:
                     errors.append(f"{robot['robot_id']}: invalid crossing")
             elif action in ('cross_wait', 'charge_wait'):
                 expected_energy = duration / 60 * cfg['wait_energy_per_min']
@@ -325,8 +467,8 @@ def validate_result(result):
                 if result.get('mode') != 'commands' and (departure is None or departure['action'] != 'move' or departure['to_node'] != 'H' or abs(departure['start_time'] - a['end_time']) > 1e-6):
                     errors.append(f"{robot['robot_id']}: charger not vacated immediately")
                 expected_energy = -duration / 60 * cfg['charge_per_min']
-                if a['from_node'] != a['resource'] or a['to_node'] != a['resource']:
-                    errors.append(f"{robot['robot_id']}: charge outside bay")
+                if a['resource'] not in bays or a['from_node'] != a['resource'] or a['to_node'] != a['resource']:
+                    errors.append(f"{robot['robot_id']}: charge outside an enabled bay")
             elif action in ('load', 'unload'):
                 expected_energy = cfg['handling_energy']
                 task = next((t for t in completed if t['task_id'] == a['task_id']), None)
@@ -348,8 +490,10 @@ def validate_result(result):
                 booked = any(b['robot_id'] == a['robot_id'] and b['start_time'] <= a['start_time'] + 1e-8 and b['end_time'] >= a['end_time'] - 1e-8 for b in result['reservations'].get(a['resource'], []))
             if action in ('cross', 'charge') and not booked:
                 errors.append(f"{robot['robot_id']}: missing resource reservation")
-            if a['from_node'] != node:
+            if a['from_node'] != node or a['node'] != a['to_node']:
                 errors.append(f"{robot['robot_id']}: route continuity")
+            if action not in ('move', 'cross') and (a['from_node'] != a['to_node'] or a['to_node'] == 'X'):
+                errors.append(f"{robot['robot_id']}: stationary action moves the robot or stops in X")
             if min(a['start_soc'], a['end_soc']) < cfg['safety_soc'] - 1e-6 or max(a['start_soc'], a['end_soc']) > 100 + 1e-6:
                 errors.append(f"{robot['robot_id']}: unsafe SOC")
             last_end, soc, node = a['end_time'], a['end_soc'], a['to_node']
@@ -357,6 +501,12 @@ def validate_result(result):
 
 
 def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=None):
+    if isinstance(strategy, str) and strategy in OPTIMIZER_STRATEGIES:
+        try:
+            from optimizer import optimize
+        except ImportError as exc:
+            raise InputError('CP-SAT strategies require OR-Tools; run with .venv/bin/python or install ortools.') from exc
+        return optimize(tasks, config, strategy, world, custom_strategy)
     if strategy == 'custom':
         from command_plan import execute_commands
         return execute_commands(tasks, config, world, custom_strategy)
@@ -369,6 +519,13 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
     if rules:
         cfg.charge_target = rules['charge_target']
     plan = Planner(cfg, world, rules)
+    norm = normaliser(tasks, cfg, world)
+    plan = staged(plan, tasks) if strategy == 'staged' else plan_tasks(plan, tasks, strategy)
+    return build_result(plan, tasks, strategy, started, norm)
+
+
+def plan_tasks(plan, tasks, strategy='joint'):
+    rules = plan.rules
     pending = list(tasks)
     while pending:
         # Joint heuristic chooses among the next 8 released/future jobs; no optimality claim.
@@ -393,6 +550,8 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
                     if rules:
                         score = custom_score(task, done, waits, energy, distance, rules)
                     elif strategy == 'joint':
+                        # Per-order greedy score in absolute units; normalising one order's increments by
+                        # whole-schedule FCFS totals would erase deadline pressure and cause energy deadlocks.
                         score = done['completion_time'] + 3 * task['priority'] * done['tardiness'] + .5 * waits + 2 * energy
                     else:
                         score = done['completion_time']
@@ -404,14 +563,20 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
             raise InputError('No energy-safe schedule found for the next tasks. ' + (failures[0] if failures else 'Check task configuration.'))
         _, tid, _, plan = min(choices, key=lambda x: x[:3])
         pending = [t for t in pending if t['task_id'] != tid]
+    return plan
+
+
+def build_result(plan, tasks, strategy, started, norm=None):
+    cfg, rules = plan.c, plan.rules
+    norm = norm or normaliser(tasks, cfg, plan.world)
     actions = sorted(plan.actions, key=lambda a: (a['start_time'], a['robot_id']))
     makespan = max(t['completion_time'] for t in plan.results)
     cross_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'cross_wait')
     charge_wait = sum(a['end_time'] - a['start_time'] for a in actions if a['action'] == 'charge_wait')
     occupied = lambda key: sum(a['end_time'] - a['start_time'] for a in plan.calendars[key])
-    result = dict(strategy=strategy, strategy_label=rules['name'] if rules else STRATEGIES[strategy], config=asdict(cfg), nodes=NODES,
+    result = dict(strategy=strategy, strategy_label=rules['name'] if rules else {**STRATEGIES, **OPTIMIZER_STRATEGIES}[strategy], config=asdict(cfg), nodes=NODES,
                   map=plan.world, custom_strategy=rules,
-                  robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f"{r['loop']}1", initial_soc=cfg.initial_soc) for r in plan.robots],
+                  robots=[dict(robot_id=r['robot_id'], loop=r['loop'], start_node=f"{r['loop']}1", initial_soc=cfg.start_soc(i)) for i, r in enumerate(plan.robots)],
                   tasks=sorted(plan.results, key=lambda t: (t['release_time'], t['task_id'])), actions=actions,
                   reservations={k: sorted(v, key=lambda a: a['start_time']) for k, v in plan.calendars.items()})
     events = []
@@ -431,10 +596,13 @@ def simulate(tasks, config=None, strategy='joint', world=None, custom_strategy=N
         average_wait=(cross_wait + charge_wait) / len(tasks),
         energy=sum(max(0, a['energy']) for a in actions),
         distance_m=sum(a['distance_m'] for a in actions),
-        min_soc=min(a['end_soc'] for a in actions), violations=len(errors),
+        min_soc=min([a['end_soc'] for a in actions] + [cfg.start_soc(i) for i in range(4)]), violations=len(errors),
         cross_utilization=occupied('X') / makespan,
         charge_utilization=sum(occupied(f'C{i + 1}') for i in range(cfg.chargers)) / (makespan * cfg.chargers),
         charging_sessions=sum(a['action'] == 'charge' for a in actions), runtime=time.perf_counter() - started)
+    terms = objective_terms(plan)
+    result['summary'].update(objective=objective(terms, norm), objective_terms=terms,
+                             objective_reference=dict(strategy=norm['strategy'], terms=norm['reference']))
     if errors:
         raise RuntimeError('Schedule validation failed: ' + '; '.join(errors))
     return result
