@@ -22,6 +22,10 @@ Scope: self-designed map and data; robots move along fixed directed routes (no c
 or obstacle avoidance); battery, handling and charging are software states. The emphasis is on
 scheduling and resource conflicts.
 
+### 1.1 Related work
+
+Scheduling, routing and control of automated guided vehicles (AGVs) have been surveyed extensively [9–13]. The surveys contrast dispatching rules, which decide one vehicle or one order at a time, with optimisation approaches that decide assignment, sequencing and conflict-free timing together; our baselines belong to the first group, CP-SAT to the second. Large warehouse fleets combine central allocation of orders and resources with path planning by the individual robots [14], and multi-agent path finding formalises collision-free movement on a graph [15]. Reserving an intersection in space–time, as our calendar for X does, was proposed for autonomous vehicles by Dresner and Stone [16]. Battery constraints matter in AGV simulation and planning [17, 18]; in electric vehicle routing, recharging stations [19], partial recharging [20] and non-linear charging curves [21] are modelled explicitly. The optimiser follows constraint-based scheduling with optional interval variables and no-overlap constraints [4, 5], solved by the CP-SAT solver of Google OR-Tools [1, 2], which builds on lazy clause generation [3] and uses large neighbourhood search [6] among its parallel workers. The online variant applies the rolling (receding) horizon principle [22, 23].
+
 ## 2. System description
 
 ### 2.1 Network
@@ -89,7 +93,7 @@ end). Its core is a deterministic discrete-event engine with reservation calenda
 
 - **World and energy model** (`simulator.py`, `customization.py`): directed edges with length,
   travel time and energy; per-action SOC updates for moving, crossing, waiting, handling and charging.
-- **Reservation calendars**: one for X (with the $2 \times$ buffer gap) and one per bay. A robot
+- **Reservation calendars**: one for X (with the $2 \times$ buffer gap) and one per bay, in the spirit of reservation-based intersection management [16]. A robot
   requesting a resource receives the earliest feasible slot and the waiting time is recorded as an
   explicit `cross_wait` or `charge_wait` action at an allowed waiting point.
 - **Independent validator** (`validate_result`): recomputes from the returned action log alone the
@@ -102,6 +106,10 @@ end). Its core is a deterministic discrete-event engine with reservation calenda
 - **Command mode**: an external plan (robot, start time, action) can be executed strictly; timing,
   resource and battery conflicts are reported instead of being repaired.
 
+![The 2-D web app replaying the CP-SAT schedule of the worked example (Section 5), paused at 08:09: R3 is inside X, R1 and R2 occupy C1 and C2, R4 approaches X on its way to order T005](../results/ui_replay.png)
+
+*The running 2-D web application (regenerate with `report/capture_ui.py`). The map, robots, intersection state and bay occupancy are redrawn from the event log during replay; the right-hand panel holds the instance generator, battery and charging parameters and strategy selection.*
+
 ## 4. Scheduling strategies
 
 ### 4.1 Baselines
@@ -110,10 +118,10 @@ end). Its core is a deterministic discrete-event engine with reservation calenda
    completion; a robot below 20 % SOC charges before its next order; intersection slots are granted in
    booking order (first come, first served).
 2. **Staged** — the proposal's "assign, then reserve the intersection, then charge" decomposition.
-   Stage 1 assigns orders by list scheduling on nominal travel times, ignoring X, chargers and
+   Stage 1 assigns orders by list scheduling [7] on nominal travel times, ignoring X, chargers and
    battery. Stage 2 executes each robot's fixed sequence with intersection reservations. Stage 3
    inserts a charge only when the next order would otherwise be unsafe.
-3. **Deadline + reservations** — earliest due date first (priority breaks ties), with the resource
+3. **Deadline + reservations** — earliest due date first [7, 8] (priority breaks ties), with the resource
    reservations and energy checks of the full engine.
 4. **Joint greedy** — evaluates up to eight upcoming orders on both compatible robots, including the
    resulting intersection and charger reservations and charging insertions, and picks the candidate
@@ -126,7 +134,7 @@ the other three robots.
 
 ### 4.2 CP-SAT joint optimisation
 
-The full formulation is in `docs/optimizer_model.md`; this section summarises it. The key
+The model is solved with CP-SAT (Google OR-Tools 9.15) [1, 2]. The full formulation is in `docs/optimizer_model.md`; this section summarises it. The key
 observation is that routes are fixed, so for every pair of consecutive jobs of a robot the travel
 time, energy and the **set of crossings of X** are known in advance. Each robot $k$ gets a graph whose
 vertices are a depot (its current state), every order of its loop, and $|Q_k|$ optional charging
@@ -145,7 +153,7 @@ every vertex; tardiness $T_i$ and $C_{\max}$.
   absent vertices, so each robot follows a single sequence starting at its depot.
 - **Timing:** if arc $a \to b$ is chosen, $b$ starts after $a$ ends and its arrival follows the
   fixed path; $s_i \ge r_i$. Idle time between jobs costs no energy, as in the simulator.
-- **Intersection:** every crossing on every arc and inside every order is an optional interval
+- **Intersection:** every crossing on every arc and inside every order is an optional interval [4]
   $[e_{kr}, l_{kr} + 2\beta)$, present only if its arc is chosen. All of them share one `NoOverlap`,
   which enforces both mutual exclusion and the $2\beta$ buffer. The wait $w_{kr}$ happens at the
   incoming waiting point ($W_A$, $W_B$ or H), never inside X.
@@ -173,7 +181,7 @@ recorded, so CP-SAT never reports a schedule worse than joint greedy.
 
 *Search.* CP-SAT is run with 8 parallel workers. With a single worker, the solver did not improve the
 warm start on 40-order instances even after about two minutes, while the parallel portfolio, whose
-large-neighbourhood-search workers do most of the work, improved it substantially within the same
+large-neighbourhood-search [6] workers do most of the work, improved it substantially within the same
 time. On small instances (4–6 orders) the model reaches proven optimality and matches the analytical
 lower bound (unit tests). On realistic sizes the lower bound stays weak (large reported gaps), so the
 results are good incumbents, not proven optima.
@@ -181,7 +189,7 @@ results are good incumbents, not proven optima.
 ### 4.3 Rolling-horizon re-optimisation
 
 Offline optimisation assumes all orders are known at time 0. The rolling strategy removes that
-assumption: an order becomes visible only at its release time.
+assumption: an order becomes visible only at its release time, and the plan is recomputed over a receding horizon [22, 23].
 
 ```
 t ← 0
@@ -203,12 +211,74 @@ current state. (An earlier version used full-instance references; the review sho
 changed decisions, i.e. it leaked future information.) The final schedule is scored with the
 full-instance $J$ like every other strategy.
 
-## 5. Experiments
+## 5. Worked example
 
-### 5.1 Setup
+This section follows a single small instance in full. It has 12 orders (seed 6, with a release gap of 25 s instead of the default 12 s, so all are released during the first 280 s; five in zone A and seven in zone B), initial SOC 50.1, 53.9, 52.2 and 80.8 % for R1–R4 (the app's "random per robot" draw for this seed), a 25 % safety threshold and two bays; all other parameters are the defaults. FCFS is compared with CP-SAT, run with one worker and a deterministic budget so the schedule is reproducible. Both schedules pass the independent validator; `report/case_study.py` regenerates every number below.
+
+**Order assignment.** An order can only go to one of the two robots of its zone, but the methods split them differently. FCFS gives T012 (due at 547 s) to R2, which first has to charge; T012 is completed only after R2's 11-minute charge, 430 s late. CP-SAT also sends R2 to charge first, but lets R1 serve T012 before charging itself (completed at 201 s). In zone B, R4 serves four orders, two of them while R3 is at the charger.
+
+| Order | Loop: route | r_i | d_i | p_i | FCFS robot | FCFS C_i | FCFS T_i | CP-SAT robot | CP-SAT C_i | CP-SAT T_i |
+|---|---|--:|--:|--:|---|--:|--:|---|--:|--:|
+| T005 | B: B4→B3 | 30 | 835 | 2 | R4 | 206 | 0 | R4 | 582 | 0 |
+| T012 | A: A4→A2 | 40 | 547 | 1 | R2 | 977 | 430 | R1 | 201 | 0 |
+| T004 | B: B1→B2 | 100 | 989 | 3 | R3 | 145 | 0 | R3 | 926 | 0 |
+| T002 | B: B4→B3 | 110 | 729 | 3 | R4 | 337 | 0 | R3 | 347 | 0 |
+| T008 | B: B2→B3 | 130 | 911 | 1 | R3 | 195 | 0 | R3 | 200 | 0 |
+| T003 | B: B4→B3 | 170 | 748 | 2 | R4 | 473 | 0 | R4 | 718 | 0 |
+| T007 | B: B2→B3 | 180 | 1072 | 1 | R3 | 1096 | 24 | R4 | 442 | 0 |
+| T009 | A: A2→A1 | 190 | 829 | 1 | R2 | 1098 | 269 | R2 | 721 | 0 |
+| T010 | A: A2→A1 | 190 | 937 | 1 | R2 | 1234 | 297 | R1 | 931 | 0 |
+| T011 | A: A2→A1 | 200 | 1023 | 2 | R1 | 1673 | 650 | R2 | 862 | 0 |
+| T001 | B: B1→B2 | 240 | 720 | 1 | R3 | 1207 | 487 | R4 | 382 | 0 |
+| T006 | A: A1→A3 | 280 | 944 | 3 | R2 | 1304 | 360 | R2 | 932 | 0 |
+
+**Intersection.** Each crossing occupies X for 6 s; the next may start no earlier than 4 s (2β) after it ends. The tightest pair of the CP-SAT schedule meets this bound exactly: R3 leaves X at 491.6 s on its way to the charger and R4 enters at 495.6 s. FCFS has the only intersection wait in either schedule: R2 crosses at 80 s and R1, arriving at W_A at the same moment, waits 10 s (6 s crossing plus the 4 s gap). CP-SAT avoids it by sending R1 through X at 140 s.
+
+| Robot | Loop | Orders | Entries into X (s), CP-SAT | Initial SOC | Min. SOC | Final SOC |
+|---|---|--:|---|--:|--:|--:|
+| R1 | A | 2 | 140, 261<sup>c</sup>, 769<sup>H</sup>, 885 | 50.1 | 25.9 | 46.5 |
+| R2 | A | 3 | 80<sup>c</sup>, 554<sup>H</sup>, 680, 816 | 53.9 | 41.3 | 42.5 |
+| R3 | B | 3 | 271, 486<sup>c</sup>, 855<sup>H</sup> | 52.2 | 27.0 | 44.5 |
+| R4 | B | 4 | 496, 642 | 80.8 | 51.6 | 51.6 |
+
+*Superscript c: on the way to the charger; H: returning from it; others: along the loop.*
+
+**Charging.** Both methods charge three times, but very differently. FCFS always charges to 95 %. R2 takes C1 from 126 to 770 s. R1 reaches H at 116 s, but C2 is already booked for R3 from 281 s, and a full charge from 37 % needs about 12 minutes, so it fits in neither bay; R1 waits at H for 634 s and enters C1 at 770 s, the moment R2 leaves it. CP-SAT instead charges each robot only as far as its remaining orders and the terminal reserve require: R2 to 75.3 %, R1 to 62.7 %, R3 to 52.1 %. Total charging time falls from 2049 s to 1151 s, and the bays are chained without gaps. R3 reaches H at 512 s and waits there 2.4 s, then enters C2 at 534 s, exactly when R2 leaves it.
+
+| Method | Robot | Bay | At H (s) | Queue (s) | Charging (s) | Duration (s) | SOC (%) |
+|---|---|---|--:|--:|---|--:|---|
+| FCFS | R2 | C1 | 106 | 0.0 | 126–770 | 644 | 41.3 → 95.0 |
+| FCFS | R3 | C2 | 261 | 0.0 | 281–970 | 689 | 37.6 → 95.0 |
+| FCFS | R1 | C1 | 116 | 634.4 | 770–1486 | 716 | 35.4 → 95.0 |
+| CP-SAT | R2 | C2 | 106 | 0.0 | 126–534 | 408 | 41.3 → 75.3 |
+| CP-SAT | R1 | C1 | 287 | 0.0 | 307–749 | 442 | 25.9 → 62.7 |
+| CP-SAT | R3 | C2 | 512 | 2.4 | 534–835 | 301 | 27.0 → 52.1 |
+
+**Battery.** Under FCFS, SOC rises in long ramps to 95 %, and R1's battery drains slowly while it waits at H. CP-SAT uses more of the available battery: R1 reaches its minimum of 25.9 %, 0.9 points above the threshold, on arrival at C1. All robots end between 42 and 52 %, at or above the terminal reserve. No robot falls below the threshold in either schedule.
+
+![Worked example: Gantt chart per robot and SOC curves, FCFS (left) and CP-SAT (right)](../results/case_study.png)
+
+**Outcome.** CP-SAT finishes all orders on time, 12 minutes earlier than FCFS, with 8 % less energy and practically no queueing.
+
+| Metric | FCFS | CP-SAT |
+|---|--:|--:|
+| Makespan (s) | 1673 | 932 |
+| Total tardiness (s) | 2518 | 0 |
+| Late orders | 7 | 0 |
+| Queueing at X / at H (s) | 10 / 634 | 0 / 2.4 |
+| Energy consumed (%) | 160.5 | 147.8 |
+| Charging sessions | 3 | 3 |
+| Minimum SOC (%) | 35.4 | 25.9 |
+| J | 1.000 | 0.370 |
+
+![Analytics view of the web app for the CP-SAT schedule of the worked example](../results/ui_analytics.png)
+
+## 6. Experiments
+
+### 6.1 Setup
 
 The experiment plan of the proposal is run by `experiments.py`. Every configuration uses seeds 1–10;
-for a given seed all seven strategies (six plus the ablation of Section 6.2) receive the identical order list, configuration and seeded
+for a given seed all seven strategies (six plus the ablation of Section 7.2) receive the identical order list, configuration and seeded
 initial SOC (50–100 % per robot), and the base setting is 40 orders, 2 bays, a 10 % safety threshold,
 a 1:1 zone split and no urgent orders. One factor is varied per experiment:
 
@@ -240,10 +310,10 @@ horizon with the same battery reserve (every robot that executes orders must sti
 a charger behind a full queue; robots without orders never move in any strategy). A first run of
 offline CP-SAT without that reserve, kept as the ablation `cpsat-nores`, often ended near the safety
 floor and frequently skipped charging altogether (no charging at all on any 20-order instance), which
-inflated its advantage; Section 6 quantifies this.
+inflated its advantage; Section 7 quantifies this.
 The heuristics also always charge to 95 %, whereas CP-SAT chooses the amount.
 
-### 5.2 Algorithm comparison (base setting)
+### 6.2 Algorithm comparison (base setting)
 
 40 orders, 2 bays, 10 % threshold, 1:1 zones; mean over 10 seeds; paired change of $J$ against FCFS
 as mean / median. Full tables: `results/results.md`; every run: `results/runs.csv`.
@@ -271,10 +341,10 @@ had to fall back to its warm start, but its optimality gap stays large (base set
 range 51–70 %; all 100 instances: median 63 %, range 18–76 %):
 the lower bound of the circuit model is weak, so these are good incumbents, not proven optima.
 
-### 5.3 Sensitivity experiments
+### 6.3 Sensitivity experiments
 
 Median paired change of $J$ against FCFS. Means are in `results/results.md`; they differ strongly
-where near-zero FCFS terms inflate individual runs (Section 6.3), e.g. at 20 orders staged +81 % and
+where near-zero FCFS terms inflate individual runs (Section 7.3), e.g. at 20 orders staged +81 % and
 deadline +134 % by mean against +7 % and +10 % by median.
 
 | Experiment | Setting | Staged | Deadline | Joint | Rolling | CP-SAT |
@@ -292,7 +362,7 @@ deadline +134 % by mean against +7 % and +10 % by median.
 | | +20 % | +4 % | −5 % | −8 % | −20 % | −50 % |
 
 ¹ Mean +19 %: one seed scores $J = 3.7$ although joint beats FCFS on makespan, lateness and energy
-there (Section 6.3).
+there (Section 7.3).
 
 ![Load](../results/load.png)
 
@@ -316,9 +386,9 @@ there (Section 6.3).
   −50 %, rolling −20 % to −24 %. Deadline-first ordering, the obvious rule for urgent work, gains
   only 3–5 %.
 
-## 6. Discussion
+## 7. Discussion
 
-### 6.1 Where does the improvement come from?
+### 7.1 Where does the improvement come from?
 
 Decomposing $J$ into its four normalised terms (base setting, mean contribution; FCFS contributes
 0.25 per term) shows that the methods improve in different ways:
@@ -345,11 +415,11 @@ by 62 % and the makespan by 28 % against FCFS (44 % and 23 % against joint greed
 A plausible main source of the tardiness reduction is charging: CP-SAT charges about as often as
 joint greedy (4.2 vs 3.9 sessions) but chooses **how much** to charge and when, whereas the
 heuristics always charge to 95 %, at 5 %/min up to 17 minutes per session, often in the middle of a
-busy period. CP-SAT also changes assignment, order and departure times at the same time, so the
+busy period. Partial recharging is known to help in electric vehicle routing as well [20], and the worked example (Section 5) shows the mechanism on one instance. CP-SAT also changes assignment, order and departure times at the same time, so the
 experiments do not isolate this effect; a CP-SAT run with a fixed 95 % target would be the controlled
 test.
 
-### 6.2 The end-of-horizon reserve
+### 7.2 The end-of-horizon reserve
 
 The first CP-SAT experiments did not require any battery left after the last order. The optimiser
 then often ended near the safety threshold and skipped charging whenever the initial charge
@@ -368,7 +438,7 @@ some instances counted in several experiments; those rows were discarded). After
 was added, none of the 100 final instances fell back. Exact model/simulator agreement matters most precisely
 where an optimiser pushes against a constraint.
 
-### 6.3 The normalised objective
+### 7.3 The normalised objective
 
 Normalising by FCFS achieved its purpose: without it, priority-weighted tardiness (tens of thousands
 of seconds) would dominate the other terms by two orders of magnitude, and the four terms contribute
@@ -380,7 +450,7 @@ deadline at 20 orders (medians 0.96–0.97). Medians and paired comparisons are 
 throughout. A more robust choice would normalise by fixed, instance-independent scales (e.g. the
 mean over the whole experiment) or by the instance's median over all strategies.
 
-### 6.4 Online versus offline
+### 7.4 Online versus offline
 
 Rolling is the only method that does not know future orders, yet in the base setting it beats every
 heuristic that does (median −37 % vs −23 % for joint greedy), and it stays 8–14 percentage points
@@ -393,17 +463,17 @@ full 40-order day), so it would run in real time. With the same OR-Tools version
 wall-clock cap that does not bind, its schedules are bit-identical across machines (checked on two
 machines); runtimes of course differ.
 
-### 6.5 Limitations
+### 7.5 Limitations
 
 - CP-SAT results depend on hardware (wall-time budget); all were produced on one machine type.
 - Optimality gaps are large; better lower bounds (e.g. a relaxation per loop) would be needed to
   claim near-optimality.
 - The heuristics see all future orders, which favours them against rolling, but not against offline
   CP-SAT.
-- The charging model is linear, the network has a single intersection, and robots move on fixed
-  routes without kinematics.
+- The charging model is linear, whereas real batteries charge more slowly near full [21]; the network has a single intersection, and robots move on fixed
+  routes without kinematics or general path planning [15].
 
-## 7. Conclusion
+## 8. Conclusion
 
 A simulator for two delivery loops that share one intersection and one charging area was built,
 with an independent validator, a browser replay, and an experiment pipeline that compares six
@@ -427,3 +497,29 @@ strategies (plus one ablation) on identical, seeded instances. Over 700 validate
 4. **Fair comparison needs care.** Requiring the same end-of-horizon battery reserve changed the
    CP-SAT result substantially (0.35 → 0.47), and the normalised objective must be read with medians
    because near-zero reference terms can dominate it.
+
+## References
+
+1. L. Perron, F. Didier, and S. Gay, "The CP-SAT-LP Solver," in 29th International Conference on Principles and Practice of Constraint Programming (CP 2023), LIPIcs, vol. 280, pp. 3:1–3:2, 2023, doi:10.4230/LIPIcs.CP.2023.3.
+2. L. Perron and F. Didier, CP-SAT, OR-Tools version 9.15.6755, Google, 2026. https://developers.google.com/optimization/cp/cp_solver/
+3. O. Ohrimenko, P. J. Stuckey, and M. Codish, "Propagation via lazy clause generation," Constraints, vol. 14, no. 3, pp. 357–391, 2009, doi:10.1007/s10601-008-9064-x.
+4. P. Laborie, J. Rogerie, P. Shaw, and P. Vilím, "IBM ILOG CP optimizer for scheduling: 20+ years of scheduling with constraints at IBM/ILOG," Constraints, vol. 23, no. 2, pp. 210–250, 2018, doi:10.1007/s10601-018-9281-x.
+5. P. Baptiste, C. Le Pape, and W. Nuijten, Constraint-Based Scheduling: Applying Constraint Programming to Scheduling Problems, 1st ed. Boston, MA: Kluwer Academic Publishers, 2001, doi:10.1007/978-1-4615-1479-4.
+6. P. Shaw, "Using constraint programming and local search methods to solve vehicle routing problems," in Principles and Practice of Constraint Programming — CP98, LNCS, vol. 1520, pp. 417–431, 1998, doi:10.1007/3-540-49481-2_30.
+7. M. L. Pinedo, Scheduling: Theory, Algorithms, and Systems, 5th ed. Cham: Springer, 2016, doi:10.1007/978-3-319-26580-3.
+8. C. L. Liu and J. W. Layland, "Scheduling algorithms for multiprogramming in a hard-real-time environment," J. ACM, vol. 20, no. 1, pp. 46–61, 1973, doi:10.1145/321738.321743.
+9. I. F. A. Vis, "Survey of research in the design and control of automated guided vehicle systems," European Journal of Operational Research, vol. 170, no. 3, pp. 677–709, 2006, doi:10.1016/j.ejor.2004.09.020.
+10. T. Le-Anh and M. B. M. De Koster, "A review of design and control of automated guided vehicle systems," European Journal of Operational Research, vol. 171, no. 1, pp. 1–23, 2006, doi:10.1016/j.ejor.2005.01.036.
+11. L. Qiu, W.-J. Hsu, S.-Y. Huang, and H. Wang, "Scheduling and routing algorithms for AGVs: a survey," International Journal of Production Research, vol. 40, no. 3, pp. 745–760, 2002, doi:10.1080/00207540110091712.
+12. T. Ganesharajah, N. G. Hall, and C. Sriskandarajah, "Design and operational issues in AGV-served manufacturing systems," Annals of Operations Research, vol. 76, pp. 109–154, 1998, doi:10.1023/A:1018936219150.
+13. M. De Ryck, M. Versteyhe, and F. Debrouwere, "Automated guided vehicle systems, state-of-the-art control algorithms and techniques," Journal of Manufacturing Systems, vol. 54, pp. 152–173, 2020, doi:10.1016/j.jmsy.2019.12.002.
+14. P. R. Wurman, R. D'Andrea, and M. Mountz, "Coordinating hundreds of cooperative, autonomous vehicles in warehouses," AI Magazine, vol. 29, no. 1, pp. 9–19, 2008, doi:10.1609/aimag.v29i1.2082.
+15. R. Stern, N. R. Sturtevant, A. Felner, S. Koenig, H. Ma, T. T. Walker, J. Li, D. Atzmon, L. Cohen, T. K. S. Kumar, E. Boyarski, and R. Barták, "Multi-Agent Pathfinding: Definitions, Variants, and Benchmarks," in Proceedings of the International Symposium on Combinatorial Search (SoCS 2019), vol. 10, no. 1, pp. 151–158, 2019, doi:10.1609/socs.v10i1.18510.
+16. K. Dresner and P. Stone, "A multiagent approach to autonomous intersection management," Journal of Artificial Intelligence Research, vol. 31, pp. 591–656, 2008, doi:10.1613/jair.2502.
+17. R. McHaney, "Modelling battery constraints in discrete event automated guided vehicle simulations," International Journal of Production Research, vol. 33, no. 11, pp. 3023–3040, 1995, doi:10.1080/00207549508904859.
+18. Q. S. Kabir and Y. Suzuki, "Increasing manufacturing flexibility through battery management of automated guided vehicles," Computers & Industrial Engineering, vol. 117, pp. 225–236, 2018, doi:10.1016/j.cie.2018.01.026.
+19. M. Schneider, A. Stenger, and D. Goeke, "The electric vehicle-routing problem with time windows and recharging stations," Transportation Science, vol. 48, no. 4, pp. 500–520, 2014, doi:10.1287/trsc.2013.0490.
+20. M. Keskin and B. Çatay, "Partial recharge strategies for the electric vehicle routing problem with time windows," Transportation Research Part C: Emerging Technologies, vol. 65, pp. 111–127, 2016, doi:10.1016/j.trc.2016.01.013.
+21. A. Montoya, C. Guéret, J. E. Mendoza, and J. G. Villegas, "The electric vehicle routing problem with nonlinear charging function," Transportation Research Part B: Methodological, vol. 103, pp. 87–110, 2017, doi:10.1016/j.trb.2017.02.004.
+22. S. Sethi and G. Sorger, "A theory of rolling horizon decision making," Annals of Operations Research, vol. 29, no. 1, pp. 387–415, 1991, doi:10.1007/BF02283607.
+23. D. Q. Mayne, J. B. Rawlings, C. V. Rao, and P. O. M. Scokaert, "Constrained model predictive control: stability and optimality," Automatica, vol. 36, no. 6, pp. 789–814, 2000, doi:10.1016/S0005-1098(99)00214-9.

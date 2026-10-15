@@ -180,7 +180,7 @@ Alternatively install Playwright's browser with `python3 -m playwright install c
 - `optimizer.py`: CP-SAT joint model, decoder through the simulator, and rolling-horizon re-planning.
 - `experiments.py`: repeated-seed experiment runner, tables and figures.
 - `docs/optimizer_model.md`: mathematical formulation of the optimizer.
-- `report/`: course report — `report_en.pdf` / `report_zh.pdf` built from `report_en.tex` / `report_zh.tex` with XeLaTeX (e.g. `tectonic report_en.tex`; the Chinese version uses ctex with Noto CJK SC fonts); `report.md` is the plain-text draft.
+- `report/`: course report — `report_en.pdf` / `report_zh.pdf` built from `report_en.tex` / `report_zh.tex` with XeLaTeX (e.g. `tectonic report_en.tex`; the Chinese version uses ctex with Noto CJK SC fonts); `report.md` is the plain-text draft. `references.tex` is the shared bibliography. `report/case_study.py` regenerates the worked example (`results/case/`, `results/case_study.png`); `report/capture_ui.py` takes the app screenshots (`results/ui_*.png`) with Playwright while `app.py` runs on port 8765.
 - `command_plan.py`: strict command schema, execution, occupancy tracking, and structured errors.
 - `customization.py`: map schemas and edge metrics (also retains legacy rule helpers for compatibility testing).
 - `simulator_types.py`: shared input validation.
