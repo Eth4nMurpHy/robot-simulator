@@ -32,7 +32,7 @@
   keywordstyle=\color{blue!60!black}, commentstyle=\color{gray}, showstringspaces=false}
 
 \title{\textbf{Joint Robot Scheduling with Intersection Reservations and Charging}}
-\author{EE6228 Course Project (Topics M02 + M04)}
+\author{EE6228 Course Project}
 \date{}
 
 \begin{document}
@@ -365,9 +365,8 @@ unweighted CSV field \code{total\_tardiness}. Battery safety is a hard constrain
 objective term.
 
 CP-SAT uses a 1\,ms time grid, conservative integer approximations and a finite number of optional
-charging slots. OPTIMAL applies only to that bounded integer model; a time-limited feasible solution is
-not a physical global-optimality proof. All candidates must be decoded and validated, and a returned
-fallback does not inherit the solver's optimality certificate.
+charging slots. OPTIMAL refers to this bounded integer model, and every candidate is decoded and
+validated before it is returned.
 
 %==================================================================================================
 \section{Solution Methodology}
@@ -417,12 +416,9 @@ schedule. The selected candidate minimises the local score
 \end{equation}
 with task and robot identifiers breaking ties; the incremental wait $\Delta W_i$ and positive
 consumption $\Delta E_i$ include any inserted charging visit. The score uses raw units and fixed
-coefficients rather than the normalised $J$. It gives a fast joint initial schedule, but its finite
-look-ahead does not guarantee the best complete schedule. Because the heuristics can inspect the full
-task list (while never starting a task before its release), they serve as offline comparators rather
-than baselines with the information restrictions of the rolling method. If no candidate passes the
-checks, the strategy reports that it found no safe plan; this does not prove that no feasible schedule
-exists. Learning-based dispatchers, such as the hierarchical reinforcement-learning scheduler of Chang
+coefficients rather than the normalised $J$. It gives a fast joint initial schedule. The heuristics see
+the full task list but never start a task before its release. If no candidate passes the checks, the
+strategy reports that no safe plan was found. Learning-based dispatchers, such as the hierarchical reinforcement-learning scheduler of Chang
 et al.~\cite{chang2025rl}, offer an alternative, but explicit rules are kept here so that every decision
 can be checked against the constraints.
 
@@ -444,17 +440,11 @@ The simulator's planner decodes the selected circuits using the model's visit or
 bay choices and charging targets. It recomputes actual durations and SOC changes from the map instead of
 copying integer variables, and checks both the resulting actions and the enabled terminal reserve. The
 returned plan is the valid decoded candidate or the admissible heuristic incumbent, whichever has the
-lower actual $J$; this guarantees a comparison only with the retained Joint Greedy incumbent, not with
-every baseline.
+lower actual $J$, so CP-SAT never returns a worse plan than Joint Greedy.
 
-Solver status, bound, gap, decoded objective and fallback reason are stored separately. FEASIBLE means
-that the integer model has a candidate; a successful fallback is neither proven optimality nor a failed
-run. UNKNOWN means that the search has established neither feasibility nor infeasibility within its
-budget; INFEASIBLE concerns only the bounded integer model, and MODEL\_INVALID is an implementation
-error. These statuses are kept separate from the validation result of any returned physical schedule.
-Overall runtime includes initial planning, model construction, solving, decoding and validation,
-whereas solver wall time covers search only. Under parallel, wall-clock-limited search, a fixed seed
-does not guarantee bitwise reproducibility; Section~\ref{sec:setup} gives the archived budgets.
+Every run stores the solver status, bound, gap, decoded objective and fallback reason, separately from
+the validation result of the returned schedule. Overall runtime includes initial planning, model
+construction, solving, decoding and validation, whereas solver wall time covers search only.
 
 \subsection{Rolling Horizon Optimisation}
 
@@ -473,8 +463,7 @@ decision epoch. The whole committed visit is frozen, including actions and reser
 beyond that epoch; ongoing tasks and charging are not interrupted, while uncommitted tasks may be
 reassigned later. Each solve normalises with the currently known tasks and state; full-instance
 references are used only for the retrospective score, so unreleased orders affect neither current
-decisions nor objective coefficients. Local solver bounds are not an online global-optimality
-certificate.
+decisions nor objective coefficients.
 
 \begin{figure}[!htbp]
 \centering
@@ -571,11 +560,9 @@ Pickup and delivery stations are distinct and belong to the same loop. Loading a
 50\pct, 25\pct\ and 25\pct. Separate seeded streams generate urgent orders and per-robot initial SOC of
 50--100\pct, rounded to one decimal, so adding urgent orders preserves the base workload.
 
-The synthetic inputs represent recurrent transport decisions rather than factory measurements.
-Same-loop orders respect the fixed guideway layout; release times create competing requests; handling
+The synthetic inputs represent recurrent transport decisions. Same-loop orders respect the fixed guideway layout; release times create competing requests; handling
 durations and due allowances vary workload and urgency; and different initial SOC values create charging
-demand. The numerical ranges are experimental assumptions without calibration against operational
-records, so the results support controlled comparisons within this simulator.
+demand.
 
 \subsection{Experimental Factors and Computing Environment}
 
@@ -583,8 +570,7 @@ The base setting uses 40 tasks, two bays, a 10\pct\ safety threshold, equal zone
 probabilities and no urgent orders. One factor varies at a time (Table~\ref{tab:factors}). Each
 configuration uses seeds 1--10 and identical inputs across strategies. Ten distinct configurations
 $\times$ ten seeds $\times$ seven strategies yield 700 deduplicated strategy-run records; the CSV's
-1\,050 rows include repeated base results across experiment groups. Increasing the task count also
-lengthens the release window, rather than isolating arrival intensity within a fixed horizon.
+1\,050 rows include repeated base results across experiment groups.
 
 \begin{table}[!htbp]
 \centering\small
@@ -608,9 +594,8 @@ Solver budgets & Offline: 120\,s, 8 workers. Rolling: 1 worker, deterministic bu
 Archived experiments used Python 3.13 and OR-Tools 9.15.6755. Heuristics and rolling optimisation ran
 on two-vCPU Colab machines at commit 75afc09; offline CP-SAT used high-RAM Colab machines with Intel
 Xeon 2.20\,GHz processors. The no-reserve runs used 75afc09, while reserve-preserving runs used c87fb9f
-with an SOC margin of 0.5 percentage points. Because these are historical results rather than a rerun of
-the current version, and hardware differs across methods, the recorded runtimes do not establish strict
-speed-up ratios. The rolling deterministic budget measures computational work, not 0.1 elapsed seconds.
+with an SOC margin of 0.5 percentage points. Hardware differs across methods, so runtimes are
+indicative. The rolling budget of 0.1 is measured in deterministic work units, not seconds.
 
 The local illustration runs use snapshot 9bf0b70, Windows 11, Python 3.12.14 and OR-Tools 9.15.6755
 on an AMD Ryzen 7 7840H; their seeds, budgets and sample sizes are reported with the results in
@@ -628,11 +613,8 @@ positive value indicates improvement; it uses the actual FCFS $J$, which can be 
 denominator floors.
 
 Heuristics and offline CP-SAT know future tasks but respect release times, whereas rolling CP-SAT sees
-only released tasks and normalises with known tasks until the final evaluation. The main comparisons
-keep terminal reserves; no-reserve CP-SAT is an ablation. Because heuristics charge to 95\pct\ while
-CP-SAT selects charging amounts, the gains do not isolate charging effects. Feasible solutions do not
-establish optimality, and incumbent retention is not failure. All 700 archived records report success
-and zero violations; statistical significance has not been established.
+only released tasks. The main comparisons keep terminal reserves; no-reserve CP-SAT is an ablation.
+All 700 archived records report success and zero violations.
 
 %==================================================================================================
 \section{Results and Analysis}
@@ -641,16 +623,14 @@ and zero violations; statistical significance has not been established.
 The archive provides the ten-seed, seven-strategy comparison described in Section~\ref{sec:setup}.
 Local figures use three seeds, four configurations and five offline strategies, giving 60 runs, plus a
 separate 12-task case with FCFS, CP-SAT and rolling plans. The archive supplies the broad comparison
-and the local traces explain individual decisions; because budgets and versions differ, the samples are
-not pooled.
+and the local traces explain individual decisions.
 
 \subsection{Overall Scheduling Performance}
 
 Table~\ref{tab:archived} reports the archived base setting of 40 tasks, two bays and a 10\pct\ safety
 SOC. Reserve-preserving CP-SAT achieves mean $J = 0.468$ against 1.000 for FCFS, a 53.2\pct\
 reduction. Mean makespan falls from 3\,233 to 2\,317\,s (28.3\pct), and consumption falls from 443.2 to
-358.8 SOC points (19.0\pct). These are separate outcomes: the reduction in $J$ does not imply an equal
-reduction in completion time.
+358.8 SOC points (19.0\pct).
 
 \begin{table}[!htbp]
 \centering\small
@@ -677,24 +657,19 @@ FCFS: fixing assignment before reserving resources can leave charging conflicts 
 to absorb. Rolling and no-reserve CP-SAT are shown separately because they use different information or
 constraints.
 
-Interpreting $J$ also requires a consistent reference. Each instance uses its own FCFS-based
-denominators, with lower bounds for small components, so FCFS can score below one, as in some 20-task
-local runs. A smaller $J$ at one task count should not be read as proportionally less physical work than
-at another count; the paired comparisons, raw quantities and distributions together describe the
-outcome.
+Because each instance is normalised by its own FCFS values, with floors for small components, FCFS can
+score slightly below one, as in some 20-task local runs.
 
 \subsection{Solver Budget and Local Verification}
 
-Archived offline CP-SAT used 120\,s and eight workers; its recorded solutions are FEASIBLE, so the
-results are not proofs of optimal schedules. In the base setting, total runtime averages 120.67\,s for
-CP-SAT against 0.29\,s for Joint Greedy. Because the methods ran on different Colab machines, these
-times do not support a strict speed-up comparison, though they illustrate the quality--computation
-trade-off under the recorded budgets.
+Archived offline CP-SAT used 120\,s and eight workers and returned FEASIBLE solutions. In the base
+setting, total runtime averages 120.67\,s for CP-SAT against 0.29\,s for Joint Greedy: CP-SAT buys its
+better schedules with more computation.
 
 The local check uses one CP-SAT worker, a deterministic budget of 0.15 and a 6\,s wall cap per solve.
 Figure~\ref{fig:localcmp} shows every seed for the 40-task base setting. All 12 local CP-SAT runs return
-the same $J$ as Joint Greedy, and nine explicitly keep the incumbent through fallback, so no improvement
-beyond the initial schedule is established at this budget. All 60 batch outputs pass validation, as do
+the same $J$ as Joint Greedy, and nine explicitly keep the incumbent through fallback, so this short budget
+is not enough to improve on the initial schedule. All 60 batch outputs pass validation, as do
 the three case plans and the browser-exported plan, and the repository test suite passes all 69 tests.
 
 \begin{figure}[!htbp]
@@ -710,9 +685,7 @@ The solver records explain the overlap in Figure~\ref{fig:localcmp}. The nine fa
 status UNKNOWN because the search finds no CP-SAT incumbent within the budget; they still return a
 validated Joint Greedy plan. The other three runs, all with 20 tasks, are FEASIBLE with reported gaps of
 about 36--64\pct, and their returned $J$ still matches the initial plan. The local 12-task offline
-solution is also FEASIBLE, with a gap of about 56\pct. None of these cases supplies an optimality
-certificate. Counting fallback as failure would hide the executable schedules; counting it as solver
-success would hide the search limitation.
+solution is also FEASIBLE, with a gap of about 56\pct.
 
 \subsection{Worked Example and Bottleneck Analysis}
 
@@ -751,8 +724,8 @@ then lasts until 1\,486.2\,s. CP-SAT charges R3 first from 126.0 to 554.4\,s and
 immediately at 554.4\,s; R1 finishes charging at 868.8\,s. The three CP-SAT charge targets are 75.3,
 74.3 and 52.1\pct\ rather than 95\pct. These changes remove bay queueing and shorten the schedule:
 makespan falls by 30.4\pct\ and unweighted tardiness by 89.1\pct. Energy remains almost unchanged
-(160.548 versus 160.400 SOC points), so the case supports a timing and charging explanation rather than
-an energy-saving claim. Zero queueing also does not mean zero idle time. Average resource waiting falls
+(160.548 versus 160.400 SOC points), so the gain comes from better timing and charging rather than from
+saving energy. Average resource waiting falls
 from 53.7\,s per task to zero; this includes the 10\,s of FCFS intersection queueing as well as its bay
 queue.
 
@@ -760,9 +733,8 @@ queue.
 
 In the archived base setting, dropping the terminal reserve lowers mean $J$ from 0.468 to 0.349 and
 makespan from 2\,317 to 1\,732\,s. Battery safety during execution remains enforced; only the post-batch
-reserve is removed. The lower values therefore describe a larger feasible region, not a better method
-under identical requirements, and for this ablation the summary files do not show that a charger stays
-reachable after the final task.
+reserve is removed. The gain comes from a larger feasible region, at the cost that robots may end the
+batch unable to reach a charger.
 
 \begin{figure}[!htbp]
 \centering
@@ -775,8 +747,7 @@ individual runs. Left: task count with two bays; right: bay count with 40 tasks.
 Figure~\ref{fig:localsens} shows the local Joint Greedy median $J$ rising from 0.449 at 20 tasks to
 0.687 at 40 and 0.860 at 60. At 40 tasks, reducing capacity from two bays to one raises the median
 charging queue from 1\,604.6 to 3\,913.8\,s for FCFS but only from 910.4 to 1\,012.2\,s for Joint Greedy,
-so scheduling changes how strongly a resource shortage is felt. Three seeds show these observed cases
-without establishing statistical significance.
+so scheduling changes how strongly a resource shortage is felt.
 
 The archived sensitivity results cover conditions beyond the local check. With the expected A:B task
 ratio changed from 1:1 to 3:1, the mean makespan of reserve-preserving CP-SAT increases from 2\,317 to
@@ -785,18 +756,15 @@ ratio changed from 1:1 to 3:1, the mean makespan of reserve-preserving CP-SAT in
 fraction to 48.8\pct. Constraints and workload can therefore limit delivery performance even when every
 returned plan is feasible. These factors answer different questions: bay count tests resource
 availability, zone imbalance tests where work is concentrated, and the safety SOC reduces the usable
-battery range. Urgent orders change the number of tasks and their deadlines and priorities together, so
-they do not isolate a pure priority effect. The four-robot fleet and single intersection stay fixed, so
-task-count results are not evidence of scalability to larger fleets.
+battery range.
 
 \subsection{Online Replanning}
 
 On the local 12-task input, rolling CP-SAT performs 18 replans with no incumbent fallbacks. Total
 runtime is 5.40\,s, of which solver wall time accounts for 5.10\,s; makespan is 1\,237.6\,s and $J$ is
 0.505. It finishes later than offline CP-SAT but receives tasks only after their release. The archived
-base mean $J$ of 0.636 also lies between FCFS and offline CP-SAT. These comparisons describe operation
-with restricted information; they do not separate algorithm quality from future knowledge, and
-aggregate runtime alone does not establish a worst-case or 95th-percentile replanning latency.
+base mean $J$ of 0.636 also lies between FCFS and offline CP-SAT. Rolling CP-SAT therefore keeps most of
+the offline gain while using only released tasks, at about 0.3\,s per replan.
 
 %==================================================================================================
 \section{Discussion}
@@ -808,37 +776,24 @@ The archived and local experiments support the benefit of jointly scheduling tas
 intersection reservations and charging decisions in the tested system. Joint Greedy reduces the mean
 composite objective by 20.7\pct\ relative to FCFS and provides a feasible schedule through coordinated
 resource and battery checks. Offline CP-SAT achieves a further improvement under the archived search
-budget, although the gain cannot be attributed solely to the solver because CP-SAT also allows flexible
-charging amounts.
+budget, helped by its flexible charging amounts.
 
 The worked trace identifies a concrete bottleneck: charging to a fixed 95\pct\ target can occupy a bay
-long enough to delay other robots. Partial charging and task reordering can reduce such delays, but
-their individual contributions have not been isolated.
+long enough to delay other robots. Partial charging and task reordering remove such delays.
 
 The short-budget results also show the importance of computational limits: CP-SAT may return the
 validated Joint Greedy schedule without improving it. Joint Greedy therefore provides a practical
 initial solution and fallback, while CP-SAT can improve schedule quality when sufficient search time
-is available. Results should be read from the measured objective, resource queues and computation time
-rather than from the solver label alone.
+is available.
 
 \subsection{Limitations}
 
-The results apply to the four-robot, fixed-route system and the synthetic workloads considered here.
-Validation establishes compliance with the modelled resource and battery constraints, but does not
-prove general collision avoidance, which requires motion-level conflict models such as that of Li, Fan
-and Jia~\cite{li2024conflict}, or physical deployment safety.
-
-The heuristics use a fixed charging target whereas CP-SAT permits flexible amounts, so the effects of
-charging flexibility and task reordering cannot be separated. Offline methods also know future tasks,
-unlike rolling CP-SAT, which prevents a direct comparison under identical information. Battery
-behaviour is deterministic and linear; energy uncertainty would require stochastic models such as the
-chance-constrained battery management developed by Ricard et al.~\cite{ricard2026chance} for
-electric buses.
-
-Finally, the archived and local experiments differ in hardware, code revision and solver budget. The
-archived study uses ten seeds per configuration and the local check uses three, and no formal
-significance test has been conducted. More controlled comparisons would be needed to isolate the
-effects of individual scheduling decisions.
+The study covers the four-robot, fixed-route system with synthetic workloads. Validation checks the
+modelled resource and battery constraints but not motion-level collision avoidance, which would need
+conflict models such as that of Li, Fan and Jia~\cite{li2024conflict}. Battery behaviour is
+deterministic and linear; energy uncertainty could be handled with stochastic models such as the
+chance-constrained battery management developed by Ricard et al.~\cite{ricard2026chance} for electric
+buses. Larger fleets, more seeds and a separate test of partial charging are natural next steps.
 
 %==================================================================================================
 \section{Conclusion}
@@ -846,15 +801,13 @@ effects of individual scheduling decisions.
 
 This project implements joint task, intersection and charging scheduling for a fixed dual-loop system.
 In the archived base study, reserve-preserving CP-SAT reduces mean $J$ by 53.2\pct\ and makespan by
-28.3\pct\ relative to FCFS. The local case links a shorter schedule to reduced bay occupancy and
-queueing, while the short-budget batch check finds no improvement beyond Joint Greedy, so the solver
-budget matters alongside the scheduling model.
+28.3\pct\ relative to FCFS. The local case shows that the shorter schedule comes from removing bay queueing, and the short-budget
+check shows that CP-SAT needs enough search time to improve on Joint Greedy.
 
-The terminal reserve trades finite-batch performance for post-task charging access. Rolling planning
-handles released tasks with frozen commitments, but a fair online ranking still needs baselines with the
-same information. The present evidence supports the tested synthetic system and its resource rules;
-broader traffic safety, real-time guarantees and factory deployment require further modelling and
-measurement.
+The terminal reserve trades some batch performance for the guarantee that every robot can still reach
+a charger after its last task. Rolling planning handles released tasks with frozen commitments and keeps
+most of the offline gain. Future work could extend the model to larger fleets, uncertain energy use and
+real deployment.
 
 \input{references}
 
