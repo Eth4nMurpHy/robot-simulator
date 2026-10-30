@@ -2,649 +2,864 @@
 \setCJKmainfont{Noto Serif CJK SC}[BoldFont={Noto Sans CJK SC Bold}]
 \setCJKsansfont{Noto Sans CJK SC}
 \setCJKmonofont{Noto Sans CJK SC}
-\usepackage[margin=2.3cm]{geometry}
+\usepackage[margin=2.4cm]{geometry}
 \usepackage{amsmath,amssymb}
-\usepackage{booktabs,multirow}
+\setmainfont{texgyretermes}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold,
+  ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+\usepackage{unicode-math}
+\setmathfont{texgyretermes-math.otf}
+\usepackage{booktabs,tabularx,array}
 \usepackage{graphicx}
 \usepackage{float}
-\usepackage{caption}
+\usepackage[font=small]{caption}
 \usepackage{enumitem}
-\usepackage{algorithm}
-\usepackage{algpseudocode}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{listings}
+\usepackage{xcolor}
 \usepackage{cite}
 \usepackage[hidelinks]{hyperref}
-\graphicspath{{../results/}}
+\graphicspath{{figures/}}
 \setlist{itemsep=2pt,topsep=4pt}
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.6}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.75}
+\counterwithin{equation}{section}
+\counterwithin{table}{section}
+\counterwithin{figure}{section}
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\pct}{\,\%}
-% 表格行由 report/case_study.py 生成（原语 input 可在 tabular 内使用）。
-\makeatletter\newcommand{\inputrows}[1]{\@@input #1 }\makeatother
-\floatname{algorithm}{算法}
-\renewcommand{\algorithmicwhile}{\textbf{当}}
-\renewcommand{\algorithmicdo}{\textbf{执行}}
-\algrenewtext{EndWhile}{\textbf{结束循环}}
+\lstset{basicstyle=\ttfamily\small, columns=fullflexible, keepspaces=true, frame=single,
+  framerule=0.3pt, rulecolor=\color{gray!60}, backgroundcolor=\color{gray!5},
+  xleftmargin=4pt, xrightmargin=4pt, aboveskip=6pt, belowskip=6pt, language=Python,
+  keywordstyle=\color{blue!60!black}, commentstyle=\color{gray}, showstringspaces=false}
 
-\title{双环路配送机器人交叉口通行与\\共享充电资源联合调度}
+\title{\textbf{考虑交叉口预约与充电的多机器人联合调度}}
 \author{EE6228 课程项目（M02 与 M04 联合选题）}
-\date{纯软件二维在线仿真}
+\date{}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-四台配送机器人在两条单向环路上工作，两条环路共用一个互斥交叉口，并共用一个只能经由该交叉口到达的充电区。
-本项目构建了确定性离散事件仿真器、独立的调度验证器和浏览器回放界面，定义了归一化目标函数，并比较了四种启发式规则、
-一个同时决定任务分配、任务顺序、交叉口时隙、充电位选择和充电量的离线 CP-SAT 模型，以及它的在线滚动时域版本。
-在 700 次通过验证的运行（10 种设置 $\times$ 10 个随机种子 $\times$ 7 种策略）中，CP-SAT 相对先到先服务（FCFS）
-将目标值降低约 50\pct（迟到时间减少 62\pct，完工时间缩短 28\pct），在线滚动版本降低约 37\pct，而各单一规则基线之间
-相差不过几个百分点。我们还说明：公平比较要求所有方法在时域末端保留相同的电量储备；并讨论了归一化目标函数的局限。
-最后用一个 12 个任务的算例完整展示一份调度：任务分配、每次进入交叉口的时刻、每次充电操作以及电量曲线。
+\noindent 四台机器人在两条固定的有向环路上执行取送任务，同时共用一个交叉口和数量有限的充电位。
+由于等待同样消耗电量，任务顺序、资源排队与电池状态相互耦合。本项目在一个有界整数调度模型中联合决定
+机器人分配、访问顺序、交叉口时隙、充电位选择和充电量：联合贪心（Joint Greedy）给出初始调度，CP-SAT
+在此基础上搜索改进，滚动时域版本仅利用已释放的任务重新规划。返回的动作轨迹均经过先后顺序、资源容量和电池
+安全检查。在存档的 40 任务、10 个随机种子实验中，CP-SAT 相对 FCFS 将平均综合目标 $J$ 降低 53.2\pct，
+完工时间（makespan）缩短 28.3\pct（FCFS 版本 75afc09，CP-SAT 版本 c87fb9f；8 个工作线程，CP-SAT 时限
+120\,s）。在另一个随机种子为 6 的 12 任务实例上，CP-SAT 在单线程、30\,s 墙钟上限和 0.5 确定性预算下
+将完工时间缩短 30.4\pct。短预算批量运行未发现超出联合贪心的改进。总体而言，这些结果表明，
+对任务、交叉口和充电进行一体化调度，有望提升固定路线多机器人系统的性能。
+
+\medskip\noindent\textbf{关键词：}多机器人调度；充电调度；约束规划；交叉口预约；滚动时域；离散事件仿真。
 \end{abstract}
 
-\section{案例介绍}
+%==================================================================================================
+\section{引言}
 
-两个配送区域 A 和 B 各由一条封闭的单向环路服务。两条环路在唯一的互斥交叉口 X 相交，两个区域共用一个充电区
-（入口 H，充电位 C1 和 C2），充电区只能经由 X 到达。网络中有四台虚拟机器人：R1 和 R2 服务区域 A，R3 和 R4
-服务区域 B。取送任务随时间到达，每个任务有释放时间、取货站、送货站、装卸时间、截止时间和优先级。
+\subsection{研究背景}
 
-两类共享资源相互耦合。需要充电的机器人必须两次通过 X（去和回），因此交叉口拥堵会推迟充电；充电排队反过来又会推迟该机器人
-以及排在其后的机器人此后的所有交叉口请求。电池约束使问题更难：机器人只有在完成任务后仍能在不低于安全阈值的情况下到达充电位时，
-才能接受该任务。本项目研究如何协调\textbf{任务分配、任务顺序、交叉口时隙、充电位选择和充电时长}，
-使机器人队伍在高负载下保持安全与准时。
+多机器人系统广泛用于自动化制造和仓储环境中的运输与物料搬运。调度首先涉及任务分配，即决定由哪台机器人
+执行哪项任务以及机器人之间如何协同。Athira 等~\cite{athira2025mrta} 综述了此类任务分配问题，以及
+协同与不确定性的处理方法。
 
-\emph{范围。}地图和数据均为自行设计；机器人沿固定的有向路线移动（不考虑连续运动学和避障）；电量、装卸和充电均为软件状态。
-研究重点是调度与资源冲突。
+在自动导引车（AGV）系统中，任务分配还会受到共享交通资源的制约。Li、Fan 和 Jia~\cite{li2024conflict}
+在自动化集装箱码头中将动态任务分配与无冲突路径规划相结合，要求车辆不得同时占用同一网络区域。若调度时忽略此类
+冲突，车辆在实际相遇时可能导致方案不可行。
 
-\subsection{相关工作}
+电池约束带来了第二重耦合。充电设施稀缺时，充电会与运输争夺车辆时间和充电位容量；因此 Li 等~\cite{li2025chargers}
+在充电位数量有限的条件下对 AGV 任务与充电进行联合调度。在这些研究的基础上，本项目研究固定路线多机器人
+系统中任务执行、交叉口预约与充电决策的联合调度。与模型各组成部分相关的方法将在后续相应章节
+（第~\ref{sec:model}~节和第~\ref{sec:methods}~节）中进一步讨论。
 
-自动导引车（AGV）的调度、路径规划与控制已有大量综述 \cite{qiu2002,vis2006,leanh2006,ganesharajah1998,deryck2020}。
-这些综述区分了每次只决定一辆车或一个任务的派车规则，以及同时决定分配、排序和无冲突时序的优化方法；本文的基线策略属于前者，
-CP-SAT 属于后者。大规模仓储机器人队伍由中央集中分配任务和资源，再由各机器人自行规划路径 \cite{wurman2008}，多智能体路径规划则对图上的无碰撞移动
-给出了形式化定义 \cite{stern2019}。在时空上预约交叉口（即本文 X 的预约日历所做的事）由 Dresner 和 Stone 针对自动驾驶车辆提出
-\cite{dresner2008}。电池约束对 AGV 的仿真和规划有重要影响 \cite{mchaney1995,kabir2018}；在电动车辆路径问题中，充电站
-\cite{schneider2014}、部分充电 \cite{keskin2016} 和非线性充电曲线 \cite{montoya2017} 都被显式建模。本文的优化器采用基于约束的
-调度方法，使用可选区间变量和不重叠约束 \cite{baptiste2001,laborie2018}，由 Google OR-Tools 中的 CP-SAT 求解器求解
-\cite{perron2023cpsat,ortools}；CP-SAT 以惰性子句生成 \cite{ohrimenko2009} 为基础，并在其并行线程中使用大邻域搜索
-\cite{shaw1998}。在线版本采用滚动（后退）时域原理 \cite{sethi1991,mayne2000}。
+\subsection{系统概述与问题描述}
 
-\section{系统描述}
+本项目考虑一个多机器人取送系统：四台机器人在两条固定的有向环路上运行，每条环路分配两台机器人；每项运输
+任务要求一台机器人在同一环路的两个站点之间取货并送货。两条环路共用一个交叉口，交叉口同一时刻只能容纳一台
+机器人。机器人还共用一个最多含两个充电位的充电区，每个充电位同一时刻只服务一台机器人。
 
-\subsection{网络}
+调度问题是确定由哪台机器人执行每项任务、任务的执行顺序、机器人何时通过共享交叉口，以及何时充电、充多少电。
+这些决策必须满足任务先后顺序、资源容量和电池安全约束。目标是最小化由完工时间、按优先级加权的迟到时间、
+资源等待时间和能耗构成的综合指标。
 
-每条环路是有向回路 $X \to Z_1 \to Z_2 \to Z_3 \to Z_4 \to W_Z \to X$，其中 $Z \in \{A, B\}$（图~\ref{fig:network}）。
-$W_A$ 和 $W_B$ 是机器人等待通过交叉口的唯一位置。所有进入 X 的边（$W_A \to X$、$W_B \to X$、$H \to X$）都是一次
-\emph{通过}；X 同一时刻最多容纳一台机器人，相邻两次通过之间两侧各需保留安全间隔 $\beta$。充电支路为
-$X \to H \to C_p \to H \to X$；机器人在 H 排队，绝不在 X 内或已被占用的充电位内等待，充电结束后立即离开充电位。
+\subsection{研究动机与调度难点}
 
-由于机器人沿环路行驶，每绕一圈都会经过 X：交叉口不仅位于去充电的路上，也位于每个送货点在取货点“后方”的配送路径上，
-以及每次绕环的空驶调度路径上。
+在本项目中，四台机器人服务两条固定环路，但共用交叉口 X 和充电区。任务分配结果直接改变机器人到达取货站、
+X 和充电位的时刻；由此产生的排队不仅推迟任务完成，还会持续消耗电量。因此，完工时间、迟到、等待和能耗均受同一组分配与时序决策
+的共同影响。
 
-\begin{figure}[H]
+例如，当一台机器人（如 R1）接到下一项任务时，其电量看似足以完成取货和送货，却可能不足以在之后安全到达
+充电位，调度器就必须先安排充电。为到达充电区，机器人需要预约并通过共享交叉口；之后可能还要等待空闲的
+充电位，排队期间继续耗电。充电完成后，机器人必须再次预约交叉口才能返回所属环路。这些额外的移动和等待
+可能推迟后续任务，使其错过截止时间。因此，任务调度、资源预约和电池状态必须联合考虑。
+
+\subsection{研究问题}
+
+基于上述耦合关系，本项目研究以下问题：
+\begin{itemize}
+\item \textbf{RQ1：}在任务、地图、初始荷电状态（SOC）和离线信息均相同的条件下，与先到先服务（FCFS）
+  和分阶段方法相比，联合决策如何影响完工时间、总迟到时间、资源等待、能耗以及归一化综合目标 $J$？
+\item \textbf{RQ2：}要求机器人在时域末端保留足以安全到达充电区的电量，会带来多大的性能代价？任务负载、
+  充电位数量以及 A、B 两条环路之间的任务分布如何改变系统瓶颈？
+\item \textbf{RQ3：}当任务只有在释放后才可见时，滚动时域方法能达到怎样的调度性能，又需要多少重规划与
+  求解开销？
+\end{itemize}
+
+\subsection{贡献与报告结构}
+
+本项目建立了一个联合调度模型，涵盖任务分配、机器人访问顺序、交叉口预约、充电位选择、充电时长和 SOC 演化。
+离线 CP-SAT、滚动时域优化与启发式基线共用同一离散事件执行引擎和输出验证器。每次运行均输出任务输入、动作、
+资源预约、SOC 轨迹和求解记录，使各项结果可追溯至具体决策；存档批量实验保存了每次运行的指标和求解记录。
+本项目的贡献在于这种一体化建模及其在固定双环路系统上的评估。
+
+第~\ref{sec:problem}~节定义系统、输入和范围。第~\ref{sec:model}--\ref{sec:impl}~节给出模型、求解方法和
+系统实现与验证。第~\ref{sec:setup}--\ref{sec:conclusion}~节介绍实验、分析结果、讨论局限并给出结论。附录给出完整模型、
+算例的任务列表与调度记录，以及关键代码节选。
+
+%==================================================================================================
+\section{问题定义}
+\label{sec:problem}
+
+\subsection{网络与资源配置}
+
+系统包含两条连接关系固定的单向环路（图~\ref{fig:network}）。环路 A 为 X $\to$ A1 $\to$ A2 $\to$ A3
+$\to$ A4 $\to$ WA $\to$ X，环路 B 为 X $\to$ B1 $\to$ B2 $\to$ B3 $\to$ B4 $\to$ WB $\to$ X。机器人 R1 和 R2
+只服务环路 A，R3 和 R4 只服务环路 B。WA 和 WB 是共享交叉口 X 前的等待点。充电支路为 X $\to$ H $\to$ C1/C2
+$\to$ H $\to$ X，其中 H 是充电缓冲与排队位置，C1 和 C2 是可配置的充电位。
+
+\begin{figure}[!htbp]
 \centering
-\begin{tikzpicture}[
-  st/.style={circle,draw,thick,minimum size=8mm,font=\small},
-  wt/.style={circle,draw,dashed,minimum size=7mm,font=\small},
-  bay/.style={rectangle,draw,thick,minimum width=9mm,minimum height=6mm,font=\small},
-  ed/.style={-{Stealth[length=2.2mm]},thick},
-  scale=1.05]
-  \node[circle,draw,very thick,fill=yellow!25,minimum size=10mm] (X) at (0,0) {X};
-  \node[st,fill=blue!8] (A1) at (-1.6,1.3) {A1};
-  \node[st,fill=blue!8] (A2) at (-4.2,1.3) {A2};
-  \node[st,fill=blue!8] (A3) at (-4.2,-1.6) {A3};
-  \node[st,fill=blue!8] (A4) at (-1.6,-1.6) {A4};
-  \node[wt] (WA) at (-0.9,-0.8) {W\textsubscript{A}};
-  \node[st,fill=red!8] (B1) at (1.6,-1.6) {B1};
-  \node[st,fill=red!8] (B2) at (4.2,-1.6) {B2};
-  \node[st,fill=red!8] (B3) at (4.2,1.3) {B3};
-  \node[st,fill=red!8] (B4) at (1.6,1.3) {B4};
-  \node[wt] (WB) at (0.9,0.8) {W\textsubscript{B}};
-  \node[circle,draw,thick,minimum size=7mm,font=\small] (H) at (0,2.6) {H};
-  \node[bay,fill=green!10] (C1) at (-1.0,3.8) {C1};
-  \node[bay,fill=green!10] (C2) at (1.0,3.8) {C2};
-  \draw[ed] (X) -- (A1); \draw[ed] (A1) -- (A2); \draw[ed] (A2) -- (A3);
-  \draw[ed] (A3) -- (A4); \draw[ed] (A4) -- (WA); \draw[ed,red!70!black] (WA) -- (X);
-  \draw[ed] (X) -- (B1); \draw[ed] (B1) -- (B2); \draw[ed] (B2) -- (B3);
-  \draw[ed] (B3) -- (B4); \draw[ed] (B4) -- (WB); \draw[ed,red!70!black] (WB) -- (X);
-  \draw[ed] (X) to[bend left=12] (H); \draw[ed,red!70!black] (H) to[bend left=12] (X);
-  \draw[ed] (H) to[bend left=10] (C1); \draw[ed] (C1) to[bend left=10] (H);
-  \draw[ed] (H) to[bend left=10] (C2); \draw[ed] (C2) to[bend left=10] (H);
-  \node[font=\large\bfseries,blue!50!black] at (-2.9,-0.15) {A};
-  \node[font=\large\bfseries,red!50!black] at (2.9,-0.15) {B};
-\end{tikzpicture}
-\caption{实际实现的网络。红色箭头表示进入互斥交叉口 X 的通过；虚线节点为 X 前的等待点。R1/R2 从 A1 出发，R3/R4 从 B1 出发。}
+\includegraphics[width=0.78\linewidth]{network.png}
+\caption{网络拓扑：两条有向环路、带等待点 WA 和 WB 的共享交叉口 X，以及经 H 通往充电位 C1、C2 的充电支路。}
 \label{fig:network}
 \end{figure}
 
-\subsection{默认参数}
+地图共有 18 条有向边。行驶时间等于边长除以速度，移动能耗等于边长乘以单位距离能耗；地图编辑器可以修改这些
+参数，但不会改变连接关系。只有 X 和充电位是互斥资源，普通环路边允许多台机器人同时使用，因此模型不处理
+几何意义上的避碰。
+
+\subsection{任务、输入与输出}
+
+每项运输任务有八个字段：\code{task\_id}；最早开始时间 \code{release\_time}；同一环路上两个不同站点
+\code{pickup} 和 \code{dropoff}；装货和卸货时间 \code{load\_time}、\code{unload\_time}；截止时间
+\code{due\_time}；以及 1--5 的整数优先级 \code{priority}。表~\ref{tab:sample} 给出项目自带的样例记录，
+仅用于说明数据格式；第~\ref{sec:results}~节 12 任务实验的完整输入见表~\ref{tab:tasklist}。
 
 \begin{table}[!htbp]
 \centering\small
-\begin{tabular}{lll}
+\caption{\code{examples/tasks.csv} 中的输入样例。}
+\label{tab:sample}
+\begin{tabular}{llllllll}
 \toprule
-参数 & 基础设置 & 测试范围 \\
+task\_id & release\_time & pickup & dropoff & load\_time & unload\_time & due\_time & priority \\
 \midrule
-机器人数量 & 4 台（每条环路 2 台） & -- \\
-任务数量 & 40 & 20、40、60 \\
-初始电量 & 每台机器人 50--100\pct\ 均匀随机（固定种子） & -- \\
-安全阈值 $S_{\min}$ & 10\pct & 10、20、30\pct \\
-普通边 & 20\,m，20\,s，2\pct & 边长可编辑 \\
-进入 X 的通过 & 6\,s & 5--8\,s \\
-安全间隔 $\beta$ & 每侧 2\,s（两次通过之间 4\,s） & 1--4\,s \\
-等待耗电 $\rho_w$ & 0.2\pct/min & 0--0.5\pct/min \\
-装货 / 卸货 & 各 10--20\,s，各耗电 0.5\pct & -- \\
-充电速率 $\rho_c$ & 线性，5\pct/min & 3--8\pct/min \\
-充电位数量 & 2 & 1、2 \\
-截止时间 & 释放后 8--15\,min（紧张档：4--8\,min） & -- \\
-优先级 & 1（50\pct）、2、3 & 紧急任务 4--5 \\
-区域 A 任务占比 & 50\pct & 1:1、2:1、3:1 \\
-紧急任务 & 0 & +10\pct、+20\pct（3--6\,min 内截止） \\
+T036 & 30 & A3 & A1 & 20 & 20 & 787 & 1 \\
+T012 & 40 & B4 & B2 & 10 & 20 & 887 & 2 \\
+T016 & 40 & B4 & B3 & 15 & 15 & 825 & 3 \\
 \bottomrule
 \end{tabular}
-\caption{默认参数（SOC：电池荷电状态，单位为百分点）。}
 \end{table}
 
-$n$ 个任务的释放时间在 $[0, 12n)$ 秒内均匀分布。生成器使用固定随机种子，紧急任务和初始电量来自独立的随机数流，
-因此增加紧急任务不会改变同一种子下的基础任务。所有策略都在完全相同的实例上评估。
+输入包括任务表、地图参数、机器人初始 SOC、安全阈值、充电位数量与充电速率、缓冲参数以及求解器选项（CP-SAT
+时限、工作线程数、滚动时域）。输出包括每项任务的执行机器人和完成时间、每台机器人的动作时间线、X 与充电位的
+预约区间、SOC 轨迹、验证结果以及各项指标（完工时间、加权迟到、等待、能耗、利用率和 $J$）。JSON 和 CSV 导出
+保留完整轨迹，便于审查和复现。
 
-\subsection{目标函数}
-\label{sec:objective}
+\subsection{范围与假设}
+\label{sec:scope}
 
-方案中的目标函数把单位不同的项相加：完工时间（秒）、按优先级加权的迟到时间（秒）、排队时间（秒）和能耗（百分点）。
-高负载时迟到项可达数万秒，会淹没其他所有项。因此，每一项都除以同一实例上 FCFS 调度的对应值，四个归一化项等权相加：
+\begin{itemize}
+\item \textbf{车队与网络。}四台机器人（每条环路两台）、一个共享交叉口、最多两个充电位；每项任务都是单一
+  环路内的取送订单，机器人一次只携带一项任务。实验使用 20--60 项任务。
+\item \textbf{互斥资源。}X 和每个启用的充电位同一时刻只容纳一台机器人，相邻两次通过之间留有安全缓冲。
+  机器人只在 WA、WB 或 H 排队等待 X 或充电位，不得停在 X 内，也不得在被占用的充电位内排队。
+\item \textbf{时间与能量。}各项时长是确定的。SOC 随移动、装卸、排队和线性充电变化；任务之间断电待机不耗电。
+  任务、通过交叉口和充电访问均不可抢占，充电结束后机器人立即离开充电位。启发式规则充到 95\pct，
+  CP-SAT 则自行选择充电量。
+\item \textbf{信息条件。}启发式规则和离线 CP-SAT 可以看到完整任务表，但不会在释放前开始任务；滚动 CP-SAT
+  只看到已释放的任务，并保持已提交的动作不变。手动命令回放只执行和检查外部计划，不参与算法比较。
+\item \textbf{不在范围内。}非线性充电、多个交叉口、可变车队规模、连续运动学和避障。机器人无需返回起点；
+  末端储备只保证最后一项任务之后仍能到达充电位。
+\end{itemize}
+
+%==================================================================================================
+\section{数学模型}
+\label{sec:model}
+
+本节在第~\ref{sec:scope}~节界定的范围内建立调度决策的数学模型。每项任务依次包括空驶至取货点、装货、载货行驶和卸货。
+
+\subsection{集合、参数与决策变量}
+
+表~\ref{tab:sets} 和表~\ref{tab:vars} 定义了符号。时间单位为秒；SOC 和能量以电量百分点计。下标 0
+表示每台机器人的虚拟初始顶点。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{集合与参数。}
+\label{tab:sets}
+\begin{tabularx}{0.92\linewidth}{lX}
+\toprule
+符号 & 含义 \\
+\midrule
+$I,\ K,\ K_i$ & 任务集合、机器人集合，以及可执行任务 $i$ 的机器人集合 \\
+$P,\ Q_k$ & 启用的充电位，以及机器人 $k$ 的候选充电访问 \\
+$r_i,\ d_i,\ p_i$ & 任务 $i$ 的释放时间、截止时间和优先级 \\
+$L_i,\ U_i,\ g_h$ & 装货和卸货时间，以及每次装卸的 SOC 消耗 \\
+$\tau_{uv},\ g_{uv}$ & 有向边 $(u,v)$ 的行驶时间和 SOC 消耗 \\
+$\rho_w,\ \rho_c$ & 排队耗电速率和充电速率（每秒 SOC 百分点） \\
+$S_{\min},\ \beta,\ \delta$ & 安全 SOC 下限、缓冲参数和通过间隔 $\delta = 2\beta$ \\
+$\hat R_C,\ \hat R_T,\ \hat R_W,\ \hat R_E$ & 完工时间、加权迟到、等待和能耗的归一化参考值 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[!htbp]
+\centering\small
+\caption{决策变量。}
+\label{tab:vars}
+\begin{tabularx}{0.92\linewidth}{llX}
+\toprule
+类别 & 符号 & 含义 \\
+\midrule
+分配与顺序 & $x_{ik},\ a_{kab}$ & 任务分配；机器人 $k$ 在访问 $a$ 之后访问 $b$ 的弧变量 \\
+任务与访问时间 & $s_i,\ c_i,\ s_{kn},\ f_{kn}$ & 任务开始与送达完成时间；机器人 $k$ 第 $n$ 个访问的开始和结束 \\
+迟到与完工时间 & $T_i,\ C_{\max}$ & 任务迟到时间和最后一次送达的完成时间 \\
+交叉口预约 & $e_{kr},\ l_{kr},\ w_{kr}$ & 通过的进入时间、离开时间和之前的排队时间 \\
+充电决策 & $y_{kq},\ b_{kqp},\ u_{kq},\ D_{kq}$ & 充电访问是否启用、充电位选择、开始时间和时长 \\
+电池状态 & $S^{H},\ S^{-},\ S^{+}$ & 到达 H 时、开始充电前和充电后的 SOC \\
+等待与能耗 & $w^{C},\ W_X,\ W_C,\ E$ & 充电排队；交叉口与充电的总排队；正的 SOC 消耗总量 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{分配与时序约束}
+
+模型引入虚拟初始顶点，通过 \code{AddCircuit} 约束对每台机器人获配的任务和可选充电访问进行排序。任务顶点当且仅当
+任务被分配时激活；充电顶点在该访问启用时激活。未激活的顶点使用自环，虚拟初始顶点的自环表示机器人闲置。
+分配、弧、激活和充电位变量均为二元变量。被选中的弧满足
 \begin{equation}
-J = \frac{1}{4}\left(\frac{C_{\max}}{\hat R_C} + \frac{\sum_i p_i T_i}{\hat R_T}
-  + \frac{W_{\text{cross}} + W_{\text{charge}}}{\hat R_W} + \frac{E}{\hat R_E}\right),
+\sum_{k \in K_i} x_{ik} = 1, \qquad s_i \ge r_i, \qquad
+a_{kab} = 1 \;\Rightarrow\; s_{kb} \ge f_{ka} \quad (b \ne 0).
+\label{eq:assign}
+\end{equation}
+其中 $s_i$ 包含空驶至取货点的时间，$c_i$ 为卸货完成时间，$f_{ka}$ 为前一个访问的结束时间。若任务 $i$ 分配给
+机器人 $k$，其完成时间满足式~\eqref{eq:completion}：空驶时间由所选前驱顶点决定，载货行驶沿固定的取送路线进行，
+求和项累加集合 $\mathcal{R}_{ki}$（所选空驶和载货路径上的交叉口通行）中允许的资源排队时间。闭合到虚拟顶点
+的弧不含返程行驶，因此完工时间止于最后一次送达。
+\begin{equation}
+c_i = s_i + \tau^{\text{empty}}_{ki} + L_i + \tau^{\text{loaded}}_{i} + U_i
+  + \sum_{r \in \mathcal{R}_{ki}} w_{kr}.
+\label{eq:completion}
+\end{equation}
+
+\subsection{资源容量与电池安全}
+
+每次选中的交叉口通行都在同一个 \code{NoOverlap} 约束中预约区间 $[e_{kr},\, l_{kr} + \delta)$，其中 $e_{kr}$
+和 $l_{kr}$ 为进入和离开时间，$\delta = 2\beta$；默认缓冲参数为 2\,s，因此相邻两次通行之间间隔 4\,s。
+这是对交叉口的按时间预约，思路与自动驾驶车辆基于预约的交叉口管理~\cite{dresner2008} 相同。机器人在 WA、
+WB 或 H 等待，不得停在 X 内。
+
+每次选中的充电访问先在 H 排队，进入一个选定的充电位，不间断地充电，然后立即返回 H；充电位区间同样互不
+重叠。充电位选择满足 $\sum_{p} b_{kqp} = y_{kq}$。设到达 H 的时间为 $h$，则充电开始于
+$u = h + w^{C} + \tau_{Hp}$，访问结束于 $u + D + \tau_{pH}$。充电量和充电时长都是决策变量，这与充电位数量有限时
+采用灵活充电策略的 AGV 调度~\cite{li2025chargers} 以及将充电时长作为决策变量的模型~\cite{li2025battery}
+一致；启发式规则则固定充到 95\pct。
+
+SOC 随移动、装卸和资源排队而下降，任务之间的断电待机不耗电。对于不含充电、包含 $n_h$ 次装卸的路段，
+\begin{equation}
+S_{\text{out}} = S_{\text{in}} - \sum_{(u,v)} g_{uv} - n_h\, g_h - \rho_w \sum w ,
+\label{eq:soc}
+\end{equation}
+系统在充电前以及每个动作之后校验该式，并要求电量保持在 $[S_{\min}, 100]$ 之内。对于到达 H 时 SOC 为 $S^{H}$、排队时间为
+$w^{C}$、充电时长为 $D$ 的充电访问，安全到达、补电和离开要求
+\begin{equation}
+S^{-} = S^{H} - \rho_w w^{C} - g_{Hp} \ge S_{\min}, \qquad
+S^{+} = S^{-} + \rho_c D \le 100, \qquad
+S^{+} - g_{pH} \ge S_{\min}.
+\label{eq:charge}
+\end{equation}
+
+默认的末端储备要求每台执行过任务的机器人在最后一次送达后保留足够电量，以便到达充电位并承受保守估计的排队，
+其中包含为其他三台机器人各一次充电预留的余量；整数模型额外加 0.5 个百分点的余量，解码后的计划还要对照实际
+预约日历检查。消融版本 \code{cpsat-nores} 仅移除这一末端储备要求，仍保留执行过程中的电池安全约束；由于可行域更大，
+该版本予以单独评估。滚动时域优化则始终保留末端储备。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.86\linewidth]{reservation_charging.png}
+\caption{交叉口预约与单次充电访问（本地 12 任务运行，随机种子 6，安全 SOC 25\pct）。实心的通行区间不含
+带阴影的 4\,s 间隔；充电访问包括从 H 驶入、充电及充电后立即驶离。}
+\label{fig:reservation}
+\end{figure}
+
+\subsection{目标函数与模型范围}
+
+优化器最小化由完工时间、迟到、等待和能耗组成的综合目标。记 $T_i = \max(0,\, c_i - d_i)$、
+$C_{\max} = \max_i c_i$，交叉口和充电的总排队时间为 $W_X$ 和 $W_C$，正能耗总量为 $E$，则
+\begin{equation}
+\min\ J = \frac{1}{4}\left( \frac{C_{\max}}{\hat R_C} + \frac{\sum_i p_i T_i}{\hat R_T}
+  + \frac{W_X + W_C}{\hat R_W} + \frac{E}{\hat R_E} \right).
 \label{eq:J}
 \end{equation}
-\begin{equation}
-T_i = \max(0,\, C_i - d_i), \qquad
-\hat R_k = \max\!\left(R_k^{\text{FCFS}},\, f_k\right), \qquad
-f = (1\,\text{s},\ 60\,\text{s},\ 60\,\text{s},\ 1\pct),
-\end{equation}
-其中 $C_{\max}$ 为最后一个任务的完成时间，$p_i$ 为优先级，$C_i$ 和 $d_i$ 为任务 $i$ 的完成时间和截止时间，$T_i$ 为其迟到时间，
-$W$ 为交叉口与充电位的总排队时间，$E$ 为总能耗。下限 $f_k$ 只在 FCFS（几乎）没有迟到或排队时起作用。因此 FCFS 的得分为
-$J = 1$（当其某一项低于下限时略小于 1），$J = 0.6$ 可理解为“在这一加权平衡下比 FCFS 好 40\pct”。电池安全\emph{不}参与权衡：
-低于安全阈值是硬约束，由独立验证器检查，因此所有报告的调度中 $N_{\text{unsafe}} = 0$。
+能耗与延误一同进入目标函数，这与多载 AGV 的多目标调度中兼顾装卸延误与能耗的做法~\cite{huo2024multiload} 类似。
+参考值通常取同一实例上 FCFS 的结果，分母下限分别为 1\,s、60\,s、60\,s 和 1 个 SOC 百分点。若 FCFS 失败，
+则依次尝试分阶段和截止时间优先，最后才只用下限作为参考值；因此 FCFS 的得分不一定恰好为 1。能耗不计补电，
+加权迟到与 CSV 中未加权的 \code{total\_tardiness} 字段不同。电池安全是硬约束，不能用目标函数中的其他项补偿。
 
-\section{仿真器}
+CP-SAT 使用 1\,ms 的时间网格、保守的整数近似和有限数量的可选充电时段。状态 OPTIMAL 仅针对这一有界整数模型而言；
+在时限内得到的可行解并不构成物理意义上的全局最优证明。所有候选解均须经过解码和验证，且回退方案不会
+继承求解器的最优性证明。
 
-仿真器是一个不依赖第三方库的 Python 网页应用（标准库 HTTP 服务器，SVG 前端），核心是带预约日历的确定性离散事件引擎：
-\begin{itemize}
-\item \textbf{世界与能耗模型}（\code{simulator.py}、\code{customization.py}）：有向边带长度、行驶时间和能耗；
-  移动、通过、等待、装卸和充电均按动作更新电量。
-\item \textbf{预约日历}：X 一个（含 $2\beta$ 间隔），每个充电位一个，思路与基于预约的交叉口管理 \cite{dresner2008} 相同。机器人申请资源时获得最早的可行时隙，
-  等待时间作为显式的 \code{cross\_wait} 或 \code{charge\_wait} 动作记录在允许的等待点。
-\item \textbf{独立验证器}（\code{validate\_result}）：仅根据返回的动作日志重新计算每个动作的能耗，并检查边的合法性、路径连续性、
-  先取后送、释放时间、机器人载量、每台机器人的动作是否重叠、资源互斥及间隔（由物理轨迹推出，而不依赖预约标签）、等待位置、
-  充电后立即离开以及电量上下界。未通过验证的调度绝不会作为结果返回。
-\item \textbf{回放与分析}（\code{static/}）：二维动画只读取事件日志（从不自行推算时间），另有甘特图、电量曲线、X/C1/C2
-  预约时间轴、配送表和策略对比；任务、调度、事件、机器人和汇总均可导出为 CSV。
-\item \textbf{命令模式}：可严格执行外部计划（机器人、开始时间、动作）；时间、资源和电量冲突会被报告，而不会被自动修复。
-\end{itemize}
+%==================================================================================================
+\section{求解方法}
+\label{sec:methods}
 
-图~\ref{fig:ui} 是运行中的应用界面。回放时，地图、机器人、交叉口状态和充电位占用都由事件日志重新绘制；右侧面板包含任务生成器、
-电量与充电参数以及策略选择。
+\subsection{基线策略与联合贪心调度}
+
+所有自动方法共用同一执行器、地图、能耗规则和指标。表~\ref{tab:policies} 总结了它们的决策规则。FCFS 在
+SOC 低于 20\pct\ 时先充电再执行任务；接受的任务还必须通过完成检查和末端储备检查。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{基线调度策略。}
+\label{tab:policies}
+\begin{tabularx}{\linewidth}{lXX}
+\toprule
+策略 & 决策规则 & 比较目的 \\
+\midrule
+FCFS & 按释放时间处理；选择预计最早完成的机器人，计入排队、充电和储备检查 & 简单可执行的参照 \\
+分阶段（Staged） & 先按名义行驶时间固定分配和顺序，再加入预约和必要的充电 & 衡量分阶段规划的代价 \\
+截止时间优先（Deadline） & 按截止时间排序，优先级打破平局，并检查资源与电量可行性 & 比较截止时间优先规则 \\
+联合贪心（Joint Greedy） & 对最多八项待处理任务和可执行的机器人打分，提交最优的可行候选 & 联合启发式，
+  兼作 CP-SAT 初始调度 \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 \begin{figure}[!htbp]
 \centering
-\includegraphics[width=0.9\linewidth]{ui_replay.png}
-\caption{二维网页应用正在回放调度算例（第~\ref{sec:case}~节）的 CP-SAT 调度，暂停在 08:09（489\,s）。R3 位于 X 内
-（交叉口面板显示其占用到 08:11，下一个是 R4），R1 和 R2 分别占用充电位 C1 和 C2，R4 正驶向 X 去执行任务 T005。
-顶部显示本次运行的指标，包括相对 FCFS 的 $J = 0.370$。}
-\label{fig:ui}
+\includegraphics[width=0.8\linewidth]{pipeline.png}
+\caption{联合规划与验证流程：求解器、解码器、验证器以及向初始解的回退。所有自动策略共用同一套执行规则。}
+\label{fig:pipeline}
 \end{figure}
 
-\section{调度策略}
+联合贪心按释放时间顺序考虑最多八项待处理任务及两台可执行的机器人。每个候选方案都在状态副本上评估：尝试执行
+该任务，检查任务后的储备，必要时预先插入充电。不可行的候选会被丢弃，不影响已提交的调度。算法选取使局部得分
+\begin{equation}
+\text{score}_{ik} = c_i + 3\, p_i T_i + 0.5\, \Delta W_i + 2\, \Delta E_i
+\label{eq:score}
+\end{equation}
+最小的候选方案，得分相同时按任务和机器人编号打破平局；增量等待 $\Delta W_i$ 和正能耗 $\Delta E_i$ 包含插入的充电访问。该得分使用
+原始单位和固定系数，而不是归一化的 $J$。它能快速给出联合初始调度，但受限于前瞻视野，不能保证得到最优的完整调度。
+各启发式规则均可访问完整任务列表（实际执行仍不早于释放时间），因而属于离线对比基线，而非与滚动时域方法信息条件
+相同的在线基线。若没有候选通过检查，策略会报告未找到安全计划，但这并不证明不存在可行调度。此外，也可采用基于学习的调度器
+（例如 Chang 等~\cite{chang2025rl} 的分层强化学习调度方法）；本项目保留显式规则，以便每个决策
+都能对照约束进行检查。
 
-\subsection{基线策略}
+\subsection{离线联合优化}
 
-\begin{enumerate}
-\item \textbf{FCFS（先到先服务）}——按释放顺序处理任务；每个任务交给预计最早完成的兼容机器人；电量低于 20\pct\ 的机器人
-  在下一个任务前先充电；交叉口时隙按预约顺序分配。
-\item \textbf{分阶段}——方案中“先分配任务、再预约交叉口、最后安排充电”的分解。第一阶段按名义行驶时间做列表调度 \cite{pinedo2016} 来分配任务，
-  忽略 X、充电位和电量；第二阶段按交叉口预约执行每台机器人的固定序列；第三阶段只在下一个任务否则会不安全时插入充电。
-\item \textbf{截止时间优先 + 预约}——最早截止时间优先 \cite{liu1973,pinedo2016}（优先级打破平局），使用完整引擎的资源预约与电量检查。
-\item \textbf{联合贪心}——对两台兼容机器人评估最多八个即将到来的任务，计入由此产生的交叉口和充电预约及充电插入，选出得分最低的候选：
-  \[
-    \text{score} = C_i + 3\,p_i T_i + 0.5\,W^{\text{new}} + 2\,E^{\text{new}},
-  \]
-  其中 $W^{\text{new}}$ 和 $E^{\text{new}}$ 为该候选新增的排队时间和能耗。
-\end{enumerate}
+机器--AGV 集成调度既有混合整数规划模型~\cite{yao2025milp}，也有显式处理运输任务是否存在的约束规划模型
+~\cite{yao2026cp}。本项目同样仅在访问被选中时将其激活，并采用 Google OR-Tools 的 CP-SAT 求解器~\cite{cpsat}
+求解模型。CP-SAT 融合了惰性子句生成、线性松弛以及包括大邻域搜索在内的并行组合搜索~\cite{perron2023cpsat}，
+十分契合本问题：任务分配与访问选择均为布尔变量，可选区间、\code{AddCircuit} 和 \code{NoOverlap}
+可以直接表达访问顺序和资源容量，而线性的时间与 SOC 约束则将这些选择与可行执行联系起来。联合贪心提供初始物理调度；
+当该调度可投影至时间网格上时，还作为 \code{AddHint} 搜索提示，引导搜索但不固定决策。有效的初始调度同时独立保存在
+求解器之外。
 
-所有自动策略在接受任务前都保留电量储备：机器人必须能完成该任务、到达 H，并扛过当前已预约的充电排队以及为其他三台机器人预留的保守余量。
-所有启发式规则都固定充电到 95\pct。
+求解所得回路通过仿真器的规划器解码，使用模型给出的访问顺序、通行时间、充电位和充电目标。实际时长和 SOC
+变化根据地图重新计算，而不是直接取自整数变量；解码器还会检查生成的动作和启用的末端储备。最终返回的计划取有效
+解码候选与合格启发式初始解中实际 $J$ 较低者；这只保证不劣于所保留的联合贪心初始解，而不是不劣于所有基线。
 
-\subsection{CP-SAT 联合优化}
+求解状态、界、间隙（gap）、解码后的目标值和回退原因分别保存。FEASIBLE 表示整数模型有候选解；成功回退
+既不是已证明的最优，也不是运行失败。UNKNOWN 表示在预算内既未证明可行也未证明不可行；INFEASIBLE 只针对
+有界整数模型，MODEL\_INVALID 表示实现错误。这些状态与返回的物理调度的验证结果分开记录。总运行时间包括
+初始规划、建模、求解、解码和验证，而求解器墙钟时间只覆盖搜索。在受墙钟时间限制的并行搜索中，固定随机种子
+并不能保证结果逐位复现；存档实验的预算见第~\ref{sec:setup}~节。
 
-模型由 CP-SAT（Google OR-Tools~9.15）\cite{perron2023cpsat,ortools} 求解。完整模型见 \code{docs/optimizer\_model.md}，本节给出概要。关键观察是：路线固定，因此一台机器人任意两个相邻作业之间的行驶时间、
-能耗以及\emph{经过 X 的次数}都可预先算出。每台机器人 $k$ 对应一个图 $V_k = \{0\} \cup I_k \cup Q_k$，顶点包括表示当前状态的
-起点 $0$、其环路上的所有任务 $I_k$，以及可选的充电访问 $Q_k$。
+\subsection{滚动时域优化}
 
-\paragraph{决策变量。}
-$x_{ik} \in \{0,1\}$ 表示任务 $i$ 分配给机器人 $k$；弧变量 $a_{kab} \in \{0,1\}$ 选择每个顶点的后继；$s_i, c_i$ 为任务开始与完成时间；
-对每次通过 $r$，$e_{kr}$ 为进入时间，$w_{kr} \ge 0$ 为在 X 前的等待，离开时间 $l_{kr} = e_{kr} + \tau_r$；对每次充电访问 $q$，
-有是否存在变量 $y_{kq}$、充电位选择变量 $b_{kqp}$、在 H 的排队时间 $w^{C}_{kq}$、充电开始时间 $u_{kq}$ 与时长 $D_{kq}$；
-每个顶点在到达后和服务后的电量；迟到时间 $T_i$ 与完工时间 $C_{\max}$。
+在决策时刻 $t$，滚动时域优化仅可获取已释放且未提交的任务。与仓储 AGV 动态任务的滚动分配~\cite{xin2024dynamic}
+类似，计划随信息到达而重新计算：默认每 60\,s 一次，窗口约为每台机器人 600\,s 的工作量。任务按截止时间、
+优先级和编号排序。窗口限制的是考虑的工作量，而不是完成期限：前往取货点的行驶、排队或充电都可能使计划超出
+窗口。机器人当前状态和已提交的预约构成下一次求解的初始条件。已有研究同样采用滚动时域再优化在执行过程中调整 AGV
+通过共享交叉口的先后顺序~\cite{berndt2024receding}，这与本文滚动时域方法修正通行时隙和充电时隙的方式相近。
 
-\paragraph{约束。}
-\begin{align}
-&\textstyle\sum_{k} x_{ik} = 1 \quad \forall i,
-  \qquad \textsc{Circuit}\big(\{a_{kab}\}\big) \quad \forall k
-  && \text{（分配）}\\
-&a_{kab} = 1 \;\Rightarrow\; s_{b} \ge c_{a}, \qquad s_i \ge r_i
-  && \text{（先后与释放）}\\
-&e_{kr} = \text{arrival}_{kr} + w_{kr}, \qquad l_{kr} = e_{kr} + \tau_r
-  && \text{（通过时间）}\\
-&\textsc{NoOverlap}\big(\{[e_{kr},\, l_{kr} + 2\beta)\}_{k,r}\big)
-  && \text{（X 互斥）}\\
-&u_{kq} = h_{kq} + w^{C}_{kq} + \tau_{Hp}, \qquad
-  S^{-}_{kq} = S_{H,kq} - \rho_w w^{C}_{kq} - g_{Hp} \ge S_{\min}
-  && \text{（H 处排队）}\\
-&S^{+}_{kq} = S^{-}_{kq} + \rho_c D_{kq} \le 100, \qquad
-  \textstyle\sum_p b_{kqp} = y_{kq}
-  && \text{（充电量）}\\
-&\textsc{NoOverlap}\big(\{[u_{kq},\, u_{kq} + D_{kq}) : b_{kqp} = 1\}\big) \quad \forall p
-  && \text{（充电位互斥）}\\
-&\mathit{soc}_{\text{out}} = \mathit{soc}_{\text{in}} - \textstyle\sum g_{ab} - \sum g_h
-  - \rho_w \sum w \;\ge\; S_{\min}
-  && \text{（能耗）}\\
-&\mathit{soc}_{\text{last}(k)} \ge S_{\min} + G_{k \to H \to p} + \rho_w\, \bar W_{\text{queue}} + \delta
-  && \text{（末端储备）}
-\end{align}
-其中 $\tau$ 和 $g$ 为边的时长与能耗，$g_h$ 为装卸能耗，$h_{kq}$ 和 $S_{H,kq}$ 为到达 H 的时间与电量，$G_{k\to H\to p}$ 为从机器人最后
-一个站点到最近充电位的能耗，$\bar W_{\text{queue}} = 3\,(95 - S_{\min})/\rho_c$ 为启发式规则预留的“排在另外三次完整充电之后”的等待时间，
-$\delta = 0.5\pct$ 为小余量。每条弧上和每个任务内部的每次通过都是一个可选区间 \cite{laborie2018}，只有选中对应弧时才存在；等待发生在进入前的等待点
-（$W_A$、$W_B$ 或 H），绝不在 X 内。机器人充电结束后立即离开充电位，充电量 $\rho_c D_{kq}$ 是决策变量，而启发式规则固定充到 95\pct。
-末端储备与启发式规则在接受任何任务前所检查的条件相同。若没有余量 $\delta$，最优解会恰好落在边界上，随后被仿真器的检查拒绝，
-因为该检查在前往 H 的途中还会计入在 X 前排队的耗电。迟到时间与完工时间通过 $T_i = \max(0, c_i - d_i)$ 和
-$C_{\max} = \max_i c_i$ 线性化（\code{AddMaxEquality}）。
+每台机器人仅提交在下一个决策时刻之前启动的访问前缀。已提交的访问整体冻结，包括延续到该时刻之后的
+动作和预约；执行中的任务和充电不会被中断，未提交的任务之后仍可重新分配。每次求解都用当前已知的任务和状态
+进行归一化；全实例参考值只用于事后评分，因此未释放的订单既不影响当前决策，也不影响目标系数。局部求解器的界
+不构成在线全局最优的证明。
 
-目标函数正是式~\eqref{eq:J} 中的归一化 $J$；其参考值 $\hat R_k$ 在求解前算出，是常数，因此 $J$ 保持线性。时间以毫秒为单位、
-电量以整数单位表示，所有时长和能耗都\emph{向上}取整，保证整数可行的调度在精确仿真器中仍然可行。模型以联合贪心的调度作为初始解
-（\code{AddHint}）。
-
-\paragraph{解码。}求解器的决策（序列、通过进入时间、充电位、充电开始时间与目标电量）通过仿真器自己的规划器重放，因此返回调度中的
-时间和能耗都来自仿真器，且结果必须通过独立验证器。若解码后的调度比初始解差或未通过验证，则返回初始解并记录回退，
-因此 CP-SAT 报告的调度绝不会比联合贪心差。
-
-\paragraph{搜索。}CP-SAT 使用 8 个并行工作线程。只用一个线程时，求解器在 40 个任务的实例上运行约两分钟也没有改进初始解；
-而并行组合（主要由大邻域搜索 \cite{shaw1998} 线程完成改进）在相同时间内显著改进了它。在小实例（4--6 个任务）上模型可证明最优，并与解析下界一致
-（单元测试）。在实际规模上下界仍然较弱，因此结果是优质的可行解，而非已证明的最优解。
-
-\subsection{滚动时域再优化}
-
-离线优化假设所有任务在时刻 0 已知。滚动策略去掉了这一假设：任务只在其释放时刻才可见，计划在后退的时域上反复重算 \cite{sethi1991,mayne2000}（算法~\ref{alg:rolling}）。
-
-\begin{algorithm}[H]
-\caption{滚动时域 CP-SAT}
-\label{alg:rolling}
-\begin{algorithmic}[1]
-\State $t \gets 0$
-\While{仍有未完成任务}
-  \State $\mathcal{K} \gets$ 截至 $t$ 已释放且尚未开始的任务
-  \State $\mathcal{W} \gets$ $\mathcal{K}$ 中按紧急程度排序的任务，直到每条环路约 600\,s 的工作量
-  \State $\hat R \gets$ 从当前状态继续、仅针对 $\mathcal{K}$ 的 FCFS 参考值 \Comment{在线归一化}
-  \State plan $\gets$ 从机器人当前状态出发、对 $\mathcal{W}$ 求解 CP-SAT，已承诺的 X 与充电位预约固定
-         （1 个线程，确定性预算约 0.5\,s，初始解为联合贪心）
-  \State 承诺 plan 中所有在 $t + 60$\,s 之前开始的作业，并冻结其预约
-  \State $t \gets t + 60$\,s
-\EndWhile
-\end{algorithmic}
-\end{algorithm}
-
-已承诺的动作不再修改。每个窗口求解都要求每台机器人最后计划的作业之后保留末端储备，使下一个窗口不会陷入电量死局。
-归一化本身也是在线的：参考值只来自截至当前已知任务的 FCFS 调度。早期版本使用了全实例参考值，代码审查发现这会改变决策，
-即泄露了未来信息。最终调度与其他策略一样，用全实例的 $J$ 评分。
-
-\section{调度算例}
-\label{sec:case}
-
-本节完整跟踪一个小实例，使汇总数字背后的具体决策清晰可见。该实例有 12 个任务（随机种子 6，释放间隔取 25\,s 而非默认的 12\,s，因此均在前 280\,s 内释放；区域 A 五个、
-区域 B 七个），R1--R4 的初始电量为 50.1、53.9、52.2 和 80.8\pct（即应用中该种子的“每台机器人随机”初始电量），安全阈值 25\pct，
-两个充电位，其余参数取默认值。我们比较 FCFS 与 CP-SAT；CP-SAT 使用单线程和确定性时间预算，因此调度可以复现。两份调度都通过了
-独立验证器，下文所有数字都可由 \code{report/case\_study.py} 重新生成。
-
-\paragraph{任务分配。}表~\ref{tab:case-orders} 列出了每个任务及服务它的机器人。任务只能分给其所在区域的两台机器人之一，但两种方法的
-分法不同。FCFS 把 T012（截止于 547\,s）分给 R2，而 R2 必须先充电，因此 T012 要等 R2 充电 11 分钟之后才完成，迟到 430\,s。
-CP-SAT 同样先派 R2 去充电，但让 R1 先完成 T012（201\,s 完成）再去充电。在区域 B，R4 服务四个任务，其中两个是在 R3 充电期间完成的。
-
-\begin{table}[H]
-\centering\small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{llrrr rrr rrr}
-\toprule
-& & & & & \multicolumn{3}{c}{FCFS} & \multicolumn{3}{c}{CP-SAT} \\
-\cmidrule(lr){6-8}\cmidrule(lr){9-11}
-任务 & 环路：路线 & $r_i$ & $d_i$ & $p_i$ & 机器人 & $C_i$ & $T_i$ & 机器人 & $C_i$ & $T_i$ \\
-\midrule
-\inputrows{../results/case/tasks.tex}
-\bottomrule
-\end{tabular}
-\caption{调度算例的任务及其分配（$r_i$ 释放时间，$d_i$ 截止时间，$p_i$ 优先级，$C_i$ 完成时间，$T_i$ 迟到时间；单位为秒）。}
-\label{tab:case-orders}
-\end{table}
-
-\paragraph{交叉口。}表~\ref{tab:case-robots} 给出 CP-SAT 调度中每次进入 X 的时刻。每次通过占用 X 6\,s，下一次通过最早只能在其结束
-4\,s（$2\beta$）之后开始。调度中最紧凑的一对恰好达到这一下限：R3 在去充电途中于 491.6\,s 离开 X，R4 于 495.6\,s 进入。两份调度中唯一
-一次交叉口等待发生在 FCFS 中：R2 在 80\,s 通过，同时到达 $W_A$ 的 R1 等待 10\,s（6\,s 通过时间加 4\,s 间隔）。CP-SAT 让 R1 在 140\,s
-才通过 X，从而避免了这次等待。
-
-\begin{table}[H]
-\centering\small
-\begin{tabular}{llcp{5.5cm}rrr}
-\toprule
-机器人 & 环路 & 任务数 & 进入 X 的时刻（s） & 初始电量 & 最低电量 & 最终电量 \\
-\midrule
-\inputrows{../results/case/robots.tex}
-\bottomrule
-\end{tabular}
-\caption{CP-SAT 调度的逐台机器人情况：进入 X 的时刻（上标 c：前往充电区途中；H：从充电区返回；其余为沿环路行驶）以及电量（\%）。}
-\label{tab:case-robots}
-\end{table}
-
-\paragraph{充电。}两种方法都充电三次（表~\ref{tab:case-charging}），但方式截然不同。FCFS 总是充到 95\pct。R2 从 126\,s 到 770\,s
-占用 C1。R1 在 116\,s 到达 H，但 C2 已被 R3 从 281\,s 起预约，而从 37\pct\ 充满约需 12 分钟，两个充电位都放不下，于是 R1 在 H 等待
-634\,s，并在 770\,s R2 离开时进入 C1。CP-SAT 则只把每台机器人充到其剩余任务和末端储备所需的电量：R2 充到 75.3\pct，R1 充到 62.7\pct，
-R3 充到 52.1\pct。总充电时间从 2049\,s 降到 1151\,s，充电位之间也没有空档：R3 在 512\,s 到达 H，等待 2.4\,s 后于 534\,s 进入 C2，
-恰好是 R2 离开的时刻。
-
-\begin{table}[H]
-\centering\small
-\begin{tabular}{lllrrcrc}
-\toprule
-方法 & 机器人 & 充电位 & 到达 H（s） & 排队（s） & 充电区间（s） & 时长（s） & 电量（\%） \\
-\midrule
-\inputrows{../results/case/charging.tex}
-\bottomrule
-\end{tabular}
-\caption{调度算例的充电操作：到达充电区入口 H 的时刻、在 H 的排队时间、在充电位内的时间段以及充电前后的电量。}
-\label{tab:case-charging}
-\end{table}
-
-\paragraph{电量变化。}图~\ref{fig:case} 以甘特图展示两份调度，下方为电量曲线。在 FCFS 下，电量以很长的直线段充到 95\pct，R1 在 H
-等待时电量缓慢下降。CP-SAT 更充分地利用了可用电量：R1 在到达 C1 时达到最低值 25.9\pct，仅比阈值高 0.9 个百分点。所有机器人最终电量都在
-42 到 52\pct\ 之间，不低于末端储备（安全阈值、到达充电位所需的能耗以及排队余量）。两份调度中都没有机器人低于安全阈值。
-
-\begin{figure}[H]
+\begin{figure}[!htbp]
 \centering
-\includegraphics[width=\linewidth]{case_study.png}
-\caption{调度算例。上：每台机器人的甘特图（灰色为行驶，蓝色为装/卸货并标注任务编号，红色为通过 X，绿色为充电，橙色为排队）。
-下：各机器人电量及 25\pct\ 安全阈值。左为 FCFS，右为 CP-SAT。}
-\label{fig:case}
+\includegraphics[width=0.82\linewidth]{rolling_commit.png}
+\caption{一次本地运行中的滚动时域提交，决策时刻为 60\,s 和 120\,s。第一轮提交的访问在下一个决策时刻之后
+仍保持冻结。}
+\label{fig:rolling}
 \end{figure}
 
-\paragraph{结果。}表~\ref{tab:case-summary} 汇总了结果。CP-SAT 按时完成全部任务，比 FCFS 早 12 分钟结束，能耗少 8\pct，几乎没有排队。
-图~\ref{fig:case-ui} 是同一份 CP-SAT 调度在网页应用分析页中的显示，其中的甘特图、电量曲线、X/C1/C2 预约时间轴和配送表都与上面的表格一致。
+%==================================================================================================
+\section{系统实现与验证}
+\label{sec:impl}
 
-\begin{table}[H]
+\subsection{共享执行与可追溯性}
+
+LoopLab 由 Python 后端和浏览器回放前端组成。\code{simulator.py} 维护机器人状态、预约日历、动作生成、指标和
+验证；\code{optimizer.py} 提供离线联合优化和滚动时域优化；\code{experiments.py} 复用实例并汇总结果。前端只可视化
+返回的轨迹，不另行运行调度器。动作记录机器人和任务编号、起止节点、开始和结束时间、SOC、能耗和资源；事件、
+甘特图、电量曲线以及 CSV/JSON 导出都对应同一次运行，因此汇总结果可以追溯到具体动作和预约。
+
+严格命令回放为带绝对开始时间的 \code{execute\_task}、\code{move\_to}、\code{charge} 和 \code{wait} 命令
+提供单独接口。它会拒绝时间、资源和电量冲突，而不是自动排队或插入充电；正在充电的机器人在收到明确的移动命令前
+一直停在充电位上，被省略的任务保持未执行。因此手动计划不参与自动算法的排名。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\linewidth]{replay.jpg}
+\caption{本地仿真器回放：另一次 12 任务运行的浏览器地图、机器人位置和汇总指标。其交互式求解设置与
+第~\ref{sec:results}~节的受控算例不同，定量比较使用保存的算例输出。}
+\label{fig:replay}
+\end{figure}
+
+\subsection{独立验证}
+
+验证器根据输出的任务、动作、地图和预约重新检查正确性，包括：每项任务只执行一次、释放时间和先取后送的先后
+关系、机器人动作的连续性与不重叠、合法的有向行驶、载量、X 和充电位的占用与间隔、合法的等待位置，以及 SOC
+的连续性和上下界。根据动作重建占用情况还能发现缺失或不一致的预约记录。未通过检查的候选会被拒绝，即使优化器
+报告其可行。
+
+单任务校验算例设置如下：从 A1 到 A2、释放时间 0、截止时间 600\,s、优先级 1、装卸各 15\,s、初始 SOC 80\pct。默认
+20\,m 的边耗时 20\,s、消耗 2 个 SOC 百分点，每次装卸消耗 0.5，因此完成时间为 50\,s，最终 SOC 为 77\pct。
+使用 FCFS 参考值及其下限，
+$J = \tfrac14\left(\tfrac{50}{50} + \tfrac{0}{60} + \tfrac{0}{60} + \tfrac{3}{3}\right) = 0.5$。
+表~\ref{tab:handcheck} 将该手算结果与一次新的程序运行进行对比。若将最终 SOC 伪造为 78\pct，虽高于安全下限，
+仍无法通过一致性检查。
+
+\begin{table}[!htbp]
 \centering\small
+\caption{手算结果与程序输出。}
+\label{tab:handcheck}
 \begin{tabular}{lrr}
 \toprule
-指标 & FCFS & CP-SAT \\
+指标 & 手算 & 程序输出 \\
 \midrule
-完工时间 $C_{\max}$（s） & 1673 & 932 \\
-总迟到时间 $\sum_i T_i$（s） & 2518 & 0 \\
-迟到任务数 & 7 & 0 \\
-在 X 前 / 在 H 的排队（s） & 10 / 634 & 0 / 2.4 \\
-能耗（\%） & 160.5 & 147.8 \\
-充电次数 & 3 & 3 \\
-最低电量（\%） & 35.4 & 25.9 \\
-$J$（式~\ref{eq:J}） & 1.000 & 0.370 \\
+完成时间（s） & 50.0 & 50.0 \\
+能耗（SOC 百分点） & 3.0 & 3.0 \\
+最终 SOC（\%） & 77.0 & 77.0 \\
+目标值 $J$ & 0.500 & 0.500 \\
+约束违反数 & 0 & 0 \\
 \bottomrule
 \end{tabular}
-\caption{调度算例汇总。}
-\label{tab:case-summary}
+\end{table}
+
+目标值计算与可行性检查分开进行：验证通过后，结果构建函数重新计算最后一次送达时间、任务迟到与优先级、资源排队
+和正的动作能耗，再套用保存的归一化参考值。仓库中的测试检查这一计算，验证器测试则拒绝时间、SOC 或占用被篡改的轨迹。验证器状态独立于规划器，
+但与之共用地图和规则计算函数，因此通过验证表明调度符合所编码的模型。实现代码和实验数据见
+\url{https://github.com/Eth4nMurpHy/robot-simulator}（代码快照 \code{9bf0b70}）。
+
+%==================================================================================================
+\section{实验设置}
+\label{sec:setup}
+
+\subsection{评估问题与数据生成}
+
+RQ1 评估联合调度相对分阶段方法和单一规则基线能否改善完工时间、迟到、等待和能耗；RQ2 考察末端储备和资源
+敏感性；RQ3 考察在线求解质量和重规划开销。实验使用针对四机器人双环路系统生成的合成任务。
+
+对于 $n$ 项基础任务，释放时间在 $[0, 12n)$ 秒内以 10\,s 为步长均匀抽样。取货站和送货站互不相同且位于同一
+环路。装货和卸货各取 10、15 或 20\,s，截止时间为释放时间加 480--900\,s。优先级 1、2、3 的概率分别为
+50\pct、25\pct\ 和 25\pct。紧急订单和每台机器人 50--100\pct\ 的初始 SOC（保留一位小数）由独立的随机流生成，
+因此加入紧急订单不会改变基础工作负载。
+
+合成数据代表反复出现的运输调度决策，而非工厂实测数据：同环路订单符合固定导轨布局；释放时间形成相互竞争的请求；
+装卸时长和截止余量改变工作量和紧迫程度；不同的初始 SOC 产生充电需求。这些数值范围是实验假设，未经运营
+数据校准，因此结果只支持本仿真器内的受控比较。
+
+\subsection{实验因素与计算环境}
+
+基础设置为 40 项任务、两个充电位、10\pct\ 安全阈值、两区域分配概率相等且无紧急订单。每次只改变一个因素
+（表~\ref{tab:factors}）。每种配置使用随机种子 1--10，各策略输入相同。10 种不同配置 $\times$ 10 个种子
+$\times$ 7 种策略得到 700 条去重后的运行记录；CSV 中的 1\,050 行包含在不同实验组中重复出现的基础设置结果。
+增加任务数也会延长释放窗口，因此并没有在固定时域内单独考察到达强度。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{实验因素与求解预算。}
+\label{tab:factors}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+因素 & 取值或预算 \\
+\midrule
+任务数量 & 20、40、60；释放窗口 $12n$ 秒 \\
+充电位数量 & 1 或 2 \\
+区域不均衡 & 期望 A:B 比例为 1:1、2:1、3:1 \\
+安全 SOC & 10\pct、20\pct、30\pct \\
+紧急订单 & 额外增加 0\pct、10\pct、20\pct；截止余量 180--360\,s；优先级 4 或 5 \\
+求解预算 & 离线：120\,s，8 个工作线程。滚动：单线程，每次求解确定性预算 0.1，墙钟上限 30\,s；每 60\,s
+  重规划，前瞻约 600\,s \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+存档实验使用 Python 3.13 和 OR-Tools 9.15.6755。启发式规则和滚动时域优化基于提交版本 75afc09 在双 vCPU 的 Colab
+机器上运行；离线 CP-SAT 使用配备 Intel Xeon 2.20\,GHz 处理器的高内存 Colab 机器。无末端储备的运行使用 75afc09，
+保留末端储备的运行使用 c87fb9f，SOC 余量为 0.5 个百分点。这些均为历史结果，并非当前版本的重新运行；由于硬件不同，
+运行时间不能用来计算严格的加速比。滚动时域方法的确定性预算衡量的是计算工作量，并不等于 0.1 秒的实际耗时。
+
+本地演示运行使用快照 9bf0b70、Windows 11、Python 3.12.14 和 OR-Tools 9.15.6755，处理器为 AMD Ryzen 7
+7840H；其随机种子、预算和样本量与第~\ref{sec:results}~节的结果一并给出。历史观测与本地观测分开报告，
+表~\ref{tab:handcheck} 的单任务检查也使用同一快照。
+
+\subsection{指标、统计与公平比较}
+
+指标包括 $J$、完工时间、未加权和按优先级加权的迟到、迟到任务比例、资源等待、能耗、充电次数、运行时间和
+违反数。平均资源等待为 $(W_X + W_C)/|I|$，不含断电待机；能耗为正的 SOC 消耗之和，不计补电。表格按需
+报告均值和样本标准差；本地图表显示中位数和各随机种子的结果。成对目标降幅为 $1 - J_s / J_{\text{FCFS}}$，
+正值表示改进；它使用 FCFS 的实际 $J$，由于分母下限，该值可能小于 1。
+
+启发式规则和离线 CP-SAT 预知未来任务但遵守释放时间，而滚动时域方法仅获知已释放的任务，并在最终评估之前用已知
+任务归一化。主要比较均保留末端储备；无末端储备的 CP-SAT 仅作为消融实验。启发式规则固定充到 95\pct，CP-SAT 自选
+充电量，因此所得改进并未单独分离出充电灵活性的影响。可行解不代表最优，保留初始解也不等于失败。全部 700 条存档记录
+均报告成功且违反数为零；尚未进行统计显著性检验。
+
+%==================================================================================================
+\section{结果与分析}
+\label{sec:results}
+
+存档实验提供了第~\ref{sec:setup}~节所述的 10 个种子、7 种策略的比较。本地图表使用 3 个种子、4 种配置和
+5 种离线策略，共 60 次运行，另有一个包含 FCFS、CP-SAT 和滚动时域计划的独立 12 任务算例。存档实验提供总体比较，
+本地轨迹用于解释具体决策；二者的预算和版本不同，因此不合并样本。
+
+\subsection{总体调度性能}
+
+表~\ref{tab:archived} 给出存档基础设置的结果：40 项任务、两个充电位、10\pct\ 安全 SOC。保留末端储备的 CP-SAT
+平均 $J = 0.468$，FCFS 为 1.000，降低 53.2\pct。平均完工时间从 3\,233\,s 降至 2\,317\,s（28.3\pct），能耗从
+443.2 降至 358.8 个 SOC 百分点（19.0\pct）。这些是不同指标上的变化：$J$ 的降幅并不代表完工时间也按同等幅度缩短。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{存档基础设置的 10 个种子结果。迟到、充电排队和能耗为均值；迟到未加权，能耗不计补电。}
+\label{tab:archived}
+\begin{tabular}{lrrrrr}
+\toprule
+方法 & $J$（均值 $\pm$ 标准差） & 完工时间（s） & 迟到（s） & 充电排队（s） & 能耗（百分点） \\
+\midrule
+FCFS & $1.000 \pm 0.000$ & $3233 \pm 384$ & 26\,028 & 1\,437 & 443.2 \\
+分阶段 & $1.067 \pm 0.156$ & $3441 \pm 543$ & 27\,264 & 1\,487 & 449.0 \\
+截止时间优先 & $1.003 \pm 0.240$ & $3210 \pm 499$ & 25\,994 & 1\,290 & 438.3 \\
+联合贪心 & $0.793 \pm 0.154$ & $3021 \pm 479$ & 17\,826 & 909 & 386.4 \\
+CP-SAT & $0.468 \pm 0.062$ & $2317 \pm 477$ & 9\,934 & 0 & 358.8 \\
+CP-SAT（无储备） & $0.349 \pm 0.072$ & $1732 \pm 542$ & 5\,032 & 0 & 316.1 \\
+滚动 CP-SAT & $0.636 \pm 0.136$ & $2741 \pm 531$ & 15\,651 & 255 & 388.9 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+联合贪心使平均 $J$ 降低 20.7\pct，而分阶段和截止时间优先相对 FCFS 平均几乎没有优势：先固定任务分配再预约资源，
+可能把充电冲突留到执行阶段被动消解。滚动时域方法和无末端储备的 CP-SAT 因使用的信息或约束不同而单独列出。
+
+目标函数的解读还需注意参考基准的一致性。每个实例均采用各自基于 FCFS 的分母，并对较小的分项设置下限，因此 FCFS 的得分可能
+低于 1，部分 20 任务的本地运行就是如此。某一任务规模下较小的 $J$ 不应理解为实际工作量按比例少于另一规模；
+成对比较、原始数值和分布需要结合起来解读。
+
+\subsection{求解预算与本地验证}
+
+存档的离线 CP-SAT 使用 120\,s 和 8 个工作线程，记录的解均为 FEASIBLE，因此这些结果并非最优调度的证明。
+在基础设置下，其总运行时间平均为 120.67\,s，联合贪心为 0.29\,s。两类方法在不同的 Colab 机器上运行，无法
+严格比较加速比；结果说明在记录的预算下存在质量与计算量之间的权衡。
+
+本地检查每次求解使用单个 CP-SAT 工作线程、0.15 的确定性预算和 6\,s 墙钟上限。图~\ref{fig:localcmp} 给出
+40 任务基础设置下每个种子的结果。12 次本地 CP-SAT 运行的 $J$ 均与联合贪心相同，其中 9 次明确通过回退保留了
+初始解，因此在该预算下没有发现超出初始调度的改进。全部 60 个批量输出、三个算例计划以及浏览器导出的计划都
+通过了验证，仓库测试套件的 69 个测试也全部通过。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth]{local_comparison.png}
+\caption{本地算法比较：3 个种子、40 项任务、两个充电位、安全 SOC 10\pct。圆点为单次运行，短横线为中位数。
+在短预算下 CP-SAT 与联合贪心重合。}
+\label{fig:localcmp}
+\end{figure}
+
+求解记录解释了图~\ref{fig:localcmp} 中的重合。9 次回退运行的状态为 UNKNOWN，因为在预算内没有找到 CP-SAT
+的可行解，但它们仍返回经过验证的联合贪心计划。其余 3 次运行均为 20 项任务，状态为 FEASIBLE，报告的间隙约为
+36--64\pct，返回的 $J$ 仍与初始计划相同。本地 12 任务的离线解同样为 FEASIBLE，间隙约 56\pct。这些情况都
+不提供最优性证明。若将回退算作运行失败，会掩盖系统仍能给出可执行调度的事实；若将其算作求解成功，则会掩盖搜索受限的局限。
+
+\subsection{调度算例与瓶颈分析}
+
+本地算例包含 12 项任务，随机种子 6，释放间隔 25\,s，两个充电位，安全下限 25\pct。R1--R4 的初始 SOC 分别为
+50.1、53.9、52.2 和 80.8\pct。离线 CP-SAT 使用单线程、0.5 的确定性预算和 30\,s 墙钟上限，实测总运行时间为
+2.62\,s。图~\ref{fig:localcase} 中 FCFS 与 CP-SAT 使用相同的时间轴，表~\ref{tab:case} 还包括同一输入下的
+滚动时域方法；完整输入见表~\ref{tab:tasklist}。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{本地 12 任务算例。}
+\label{tab:case}
+\begin{tabular}{lrrrrr}
+\toprule
+方法 & $J$ & 完工时间（s） & 迟到（s） & 充电排队（s） & 最低 SOC（\%） \\
+\midrule
+FCFS & 1.000 & 1673.2 & 2518.4 & 634.4 & 35.4 \\
+CP-SAT & 0.447 & 1165.2 & 275.2 & 0.0 & 25.9 \\
+滚动 CP-SAT & 0.505 & 1237.6 & 1011.0 & 0.0 & 33.4 \\
+\bottomrule
+\end{tabular}
 \end{table}
 
 \begin{figure}[!htbp]
 \centering
-\includegraphics[width=0.88\linewidth]{ui_analytics.png}
-\caption{调度算例中 CP-SAT 调度在网页应用分析页中的显示：机器人活动、电量随时间变化、X/C1/C2 预约以及配送结果。}
-\label{fig:case-ui}
+\includegraphics[width=\linewidth]{local_case.png}
+\caption{本地调度与 SOC 比较。上方为机器人动作，下方为 SOC；虚线为 25\pct\ 的安全下限。两份调度都保留了
+末端储备并通过验证。}
+\label{fig:localcase}
 \end{figure}
 
-\section{实验}
+在 FCFS 下，R1 从 116.0\,s 到 750.4\,s 在 H 等待，充电排队 634.4\,s，之后的充电一直持续到 1\,486.2\,s。
+CP-SAT 先让 R3 从 126.0\,s 充到 554.4\,s，随后在 554.4\,s 立即让 R1 进入充电位；R1 在 868.8\,s 充电结束。
+CP-SAT 的三个充电目标分别为 75.3、74.3 和 52.1\pct，而不是 95\pct。上述调整消除了充电排队并紧凑了整体调度：
+完工时间缩短 30.4\pct，未加权迟到减少 89.1\pct。能耗几乎不变（160.548 对 160.400 个 SOC 百分点），因此
+该算例支持的是时序与充电协调方面的解释，而非节能结论。此外，零排队也不等于零空闲。平均资源等待从每项任务 53.7\,s
+降为零，其中既包括 FCFS 的充电排队，也包括其 10\,s 的交叉口排队。
 
-\subsection{实验设置}
+\subsection{末端储备与资源敏感性}
 
-方案中的实验计划由 \code{experiments.py} 执行。每种配置使用种子 1--10；对同一种子，全部七种策略（六种策略加上第~\ref{sec:reserve}~节的
-消融实验）得到完全相同的任务列表、配置和固定种子的初始电量。基础设置为 40 个任务、2 个充电位、10\pct\ 安全阈值、区域任务比例 1:1、
-无紧急任务；每个实验只改变一个因素（表~\ref{tab:exp}）。
+在存档基础设置下，去掉末端储备使平均 $J$ 从 0.468 降至 0.349，完工时间从 2\,317\,s 降至 1\,732\,s。执行
+过程中的电池安全仍然强制满足，只去掉了批次结束后的末端储备。因此，更低的指标值反映的是约束放宽后更大的可行域，而不是在
+相同要求下算法性能的提升；对于该消融实验，汇总文件也无法表明最后一项任务之后仍能到达充电位。
 
-\begin{table}[H]
-\centering\small
-\begin{tabular}{ll}
-\toprule
-实验 & 设置 \\
-\midrule
-算法比较 & 基础设置 \\
-任务负载 & 20、40、60 个任务 \\
-充电资源 & 1 或 2 个充电位 \\
-区域不平衡 & A:B = 1:1、2:1、3:1 \\
-安全阈值 & 10、20、30\pct \\
-动态任务 & 增加 0、10、20\pct\ 紧急任务（释放后 3--6\,min 截止，优先级 4--5） \\
-\bottomrule
-\end{tabular}
-\caption{实验计划。}
-\label{tab:exp}
-\end{table}
-
-在多个实验中重复出现的相同实例（即基础设置）只求解一次，共计 10 种不同设置 $\times$ 10 个种子 $\times$ 7 种策略 $=$ 700 次运行。
-每次运行记录 $J$ 及其四个原始项、迟到任务比例、X 与充电位的排队时间、能耗、充电次数和运行时间。由于不同种子的难度差别很大，
-表中还给出同一实例上 $J$ 相对 FCFS 的\emph{配对}变化。
-
-\emph{计算环境。}四种启发式规则和滚动策略都是确定性的（滚动求解受 CP-SAT 确定性时间约束，而非墙钟时间），因此其调度与机器无关；
-这一点已通过在两台不同机器上逐位复现一次滚动运行得到验证。CP-SAT 受墙钟时间约束（120\,s，8 个线程），因此依赖硬件；所有 CP-SAT
-运行都使用同一机型（Google Colab 高内存 CPU 虚拟机，8 vCPU Intel Xeon @ 2.20\,GHz，OR-Tools 9.15），每台虚拟机同一时间只运行一个求解。
-
-\emph{公平性说明。}启发式规则和离线 CP-SAT 预先知道全部任务列表（但不会在释放前开始任何任务）；滚动策略是唯一真正在线的方法。
-所有策略在时域末端保留相同的电量储备（每台执行任务的机器人都必须能排在满队列之后到达充电位；没有任务的机器人在任何策略下都不移动）。
-第一次运行的离线 CP-SAT 没有该储备，作为消融实验 \code{cpsat-nores} 保留；它常常以接近安全阈值的电量结束，并经常完全不充电，
-从而夸大了优势，第~\ref{sec:reserve}~节对此做了量化。启发式规则总是充到 95\pct，而 CP-SAT 自行选择充电量。
-
-\subsection{算法比较（基础设置）}
-
-\begin{table}[H]
-\centering\small
-\setlength{\tabcolsep}{3.5pt}
-\resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrrrrrr}
-\toprule
-策略 & $J$ & 相对 FCFS & 迟到 & 迟到时间 & 完工时间 & 充电 & 能耗 & 运行时间\textsuperscript{a} \\
- & & 均值 / 中位数 & 比例 & (s) & (s) & 次数 & (\%) & \\
-\midrule
-FCFS & 1.000 & -- & 52\pct & 26\,028 & 3\,233 & 5.0 & 443 & $<0.1$\,s \\
-分阶段 & 1.067 & $+7$ / $+2$\pct & 51\pct & 27\,264 & 3\,441 & 5.4 & 449 & $<0.1$\,s \\
-截止时间优先 + 预约 & 1.003 & $0$ / $-4$\pct & 51\pct & 25\,994 & 3\,210 & 4.9 & 438 & $<0.1$\,s \\
-联合贪心 & 0.793 & $-21$ / $-23$\pct & 37\pct & 17\,826 & 3\,021 & 3.9 & 386 & 0.3\,s \\
-滚动 CP-SAT（在线） & 0.636 & $-36$ / $-37$\pct & 37\pct & 15\,651 & 2\,741 & 4.3 & 389 & 49\,s \\
-\textbf{CP-SAT} & \textbf{0.468} & $\mathbf{-53}$ / $\mathbf{-54}$\pct & 33\pct & 9\,934 & 2\,317 & 4.2 & 359 & 121\,s \\
-CP-SAT 无储备（消融） & 0.349 & $-65$ / $-64$\pct & 23\pct & 5\,032 & 1\,732 & 2.0 & 316 & 121\,s \\
-\bottomrule
-\end{tabular}}
-\caption{基础设置（40 个任务、2 个充电位、10\pct\ 阈值、1:1 区域）；10 个种子的均值，$J$ 相对 FCFS 的配对变化以“均值 / 中位数”给出。
-\textsuperscript{a}每个实例实测的墙钟时间（CP-SAT 预算为 120\,s；滚动策略在 2 vCPU 虚拟机上运行）。完整表格见 \code{results/results.md}。}
-\label{tab:base}
-\end{table}
-
-\begin{figure}[H]
+\begin{figure}[!htbp]
 \centering
-\includegraphics[width=\linewidth]{algorithms.png}
-\caption{基础设置，10 个种子：各策略的目标值 $J$、总迟到时间和充电排队时间。}
-\label{fig:algorithms}
+\includegraphics[width=\linewidth]{local_sensitivity.png}
+\caption{本地工作量与充电敏感性。折线为种子 1--3 的中位数，浅色圆点为单次运行。左：两个充电位下的任务数量；
+右：40 项任务下的充电位数量。}
+\label{fig:localsens}
 \end{figure}
 
-全部 700 次运行都得到了通过验证、电量安全的调度；没有任何策略在任何实例上失败。均值和中位数给出相同的性能层级，并在大多数单个种子上成立
-（图~\ref{fig:algorithms}）：三种单一规则基线彼此相差不超过 $\pm 7$\pct（其内部顺序有所不同：按均值 FCFS 略优于截止时间优先，按中位数
-截止时间优先领先 4\pct），联合贪心约好五分之一，滚动策略约好三分之一，离线 CP-SAT 约好一半。离线 CP-SAT 从未回退到初始解，但最优性间隙
-仍然较大（基础设置：中位数 58\pct，范围 51--70\pct；全部 100 个实例：中位数 63\pct，范围 18--76\pct）：回路模型的下界较弱，
-因此这些是优质可行解，而非已证明的最优解。
+图~\ref{fig:localsens} 显示，本地联合贪心的 $J$ 中位数从 20 项任务时的 0.449 升至 40 项时的 0.687 和
+60 项时的 0.860。在 40 项任务下，将充电位从两个减为一个，FCFS 的充电排队中位数从 1\,604.6\,s 增至
+3\,913.8\,s，而联合贪心只从 910.4\,s 增至 1\,012.2\,s；可见调度方式会改变资源短缺的影响程度。不过，三个种子
+只能呈现这些观测趋势，不能证明统计显著性。
 
-\subsection{敏感性实验}
+存档的敏感性结果覆盖了本地检查之外的条件。期望的 A:B 任务比例从 1:1 变为 3:1 时，保留末端储备的 CP-SAT 平均
+完工时间从 2\,317\,s 增至 3\,010\,s。安全下限从 10\pct\ 提高到 30\pct，其迟到任务比例从 32.5\pct\ 增至
+48.0\pct；增加 20\pct\ 的紧急任务使平均完工时间增至 2\,820\,s，迟到比例增至 48.8\pct。因此，即使每个返回
+的计划都可行，约束和工作量仍会限制配送表现。各因素分别考察不同维度：充电位数量考察资源可用性，区域不均衡
+考察工作负载的集中程度，安全 SOC 则收窄了可用电量范围。紧急订单同时改变任务数量、截止时间和优先级，因此并未
+单独体现优先级的影响。四台机器人和单一交叉口始终固定，因此任务数量的结果不能作为扩展到更大车队的证据。
 
-表~\ref{tab:sens} 给出 $J$ 相对 FCFS 的配对变化中位数。均值见 \code{results/results.md}；在 FCFS 某项接近零而放大个别运行的情况下
-（第~\ref{sec:norm}~节），均值与中位数差别很大，例如 20 个任务时分阶段和截止时间优先的均值分别为 $+81$\pct\ 和 $+134$\pct，
-而中位数为 $+7$\pct\ 和 $+10$\pct。
+\subsection{在线重规划}
 
-\begin{table}[H]
-\centering\small
-\begin{tabular}{llrrrrr}
-\toprule
-实验 & 设置 & 分阶段 & 截止时间优先 & 联合贪心 & 滚动 & CP-SAT \\
-\midrule
-\multirow{3}{*}{任务负载} & 20 个任务 & $+7$ & $+10$ & $-30$ & $-43$ & $-62$ \\
- & 40 个任务 & $+2$ & $-4$ & $-23$ & $-37$ & $-54$ \\
- & 60 个任务 & $+8$ & $+10$ & $-16$ & $-18$ & $-47$ \\
-\midrule
-\multirow{2}{*}{充电位} & 1 个 & $+45$ & $-1$ & $-20$ & $-28$ & $-60$ \\
- & 2 个 & $+2$ & $-4$ & $-23$ & $-37$ & $-54$ \\
-\midrule
-\multirow{2}{*}{区域不平衡 A:B} & 2:1 & $+4$ & $+2$ & $-15$\textsuperscript{b} & $-25$ & $-48$ \\
- & 3:1 & $0$ & $-6$ & $-29$ & $-30$ & $-47$ \\
-\midrule
-\multirow{2}{*}{安全阈值} & 20\pct & $+2$ & $+11$ & $-18$ & $-16$ & $-51$ \\
- & 30\pct & $+17$ & $-1$ & $-13$ & $-16$ & $-52$ \\
-\midrule
-\multirow{2}{*}{紧急任务} & +10\pct & $+1$ & $-3$ & $-12$ & $-24$ & $-52$ \\
- & +20\pct & $+4$ & $-5$ & $-8$ & $-20$ & $-50$ \\
-\bottomrule
-\end{tabular}
-\caption{$J$ 相对 FCFS 的配对变化中位数（\%），每格 10 个种子。\textsuperscript{b}均值为 $+19$\pct：有一个种子的 $J = 3.7$，
-尽管联合贪心在该实例上的完工时间、迟到和能耗都优于 FCFS（第~\ref{sec:norm}~节）。}
-\label{tab:sens}
-\end{table}
+在本地 12 任务输入上，滚动时域 CP-SAT 进行了 18 次重规划，没有发生回退。总运行时间为 5.40\,s，其中求解器墙钟
+时间为 5.10\,s；完工时间为 1\,237.6\,s，$J$ 为 0.505。其完工时间虽晚于离线 CP-SAT，但只能在任务释放后获取
+任务。存档基础设置下的平均 $J$ 为 0.636，同样介于 FCFS 与离线 CP-SAT 之间。这些比较描述的是信息受限条件下
+的运行表现，无法将算法本身的求解质量与对未来信息的掌握区分开；仅凭总运行时间也无法确定最坏情况或第 95 百分位的
+重规划延迟。
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=\linewidth]{load.png}
-\caption{任务负载实验：$J$ 与迟到任务比例的中位数及四分位距。}
-\label{fig:load}
-\end{figure}
-
-\begin{itemize}
-\item \textbf{任务负载。}随着任务增加，所有方法都变差，但启发式规则和滚动策略相对 FCFS 的优势缩小（$-43$\pct\ $\to$ $-18$\pct），
-  而 CP-SAT 保持在 $-47$\pct\ 到 $-62$\pct（图~\ref{fig:load}）。60 个任务时每种方法都有一半以上的任务迟到（迟到比例 54--69\pct）；
-  队伍已超出能力，充电（7--10 次，每次最长 17\,min）成为瓶颈资源。
-\item \textbf{单个充电位。}FCFS 的充电排队从 1\,437\,s 增加到 4\,001\,s，分阶段基线大幅恶化（$+45$\pct）：它最后才决定充电，
-  机器人会同时到达唯一的充电位。联合贪心和 CP-SAT 把充电与任务一起决定，保持了优势；CP-SAT 改进最多（$-60$\pct）。
-\item \textbf{区域不平衡。}环路 A 的任务越多，所有方法的完工时间越长，因为 R1/R2 成为瓶颈。性能层级不变（CP-SAT 最好，其次是
-  滚动和联合贪心，最后是单一规则基线），只是在基线层级内部，2:1 时截止时间优先按中位数略落后于 FCFS（$+2$\pct）。
-\item \textbf{安全阈值。}阈值越高，所有方法都需要更多充电。CP-SAT 几乎不受影响（$-51$\pct\ / $-52$\pct），而滚动策略退回到联合贪心的水平
-  （$-16$\pct）：它的每个窗口都必须以完整储备结束，在 20--30\pct\ 阈值下这会迫使其提前充电，而离线视角本可避免。
-\item \textbf{紧急任务。}截止期短、优先级高的任务会使所有方法变差；离线 CP-SAT 保持约 $-50$\pct，滚动策略为 $-20$\pct\ 到 $-24$\pct。
-  对紧急任务最直观的截止时间优先规则只改进 3--5\pct。
-\end{itemize}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.92\linewidth]{chargers.png}\\[2pt]
-\includegraphics[width=0.92\linewidth]{imbalance.png}
-\caption{充电位与区域不平衡实验（中位数，四分位距）。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.92\linewidth]{safety.png}\\[2pt]
-\includegraphics[width=0.92\linewidth]{dynamic.png}
-\caption{安全阈值与紧急任务实验（中位数，四分位距）。}
-\end{figure}
-
+%==================================================================================================
 \section{讨论}
+\label{sec:discussion}
 
-\subsection{改进从何而来？}
+\subsection{结果解读}
 
-把 $J$ 分解为四个归一化项（基础设置，平均贡献；FCFS 每项贡献 0.25）可以看出，各方法的改进方式不同（表~\ref{tab:terms}）。
+存档实验和本地实验都表明，在所测试的系统中，对任务分配、交叉口预约和充电决策进行联合调度确有裨益。联合贪心
+相对 FCFS 将平均综合目标降低 20.7\pct，并通过协调的资源与电量检查给出可行调度。离线 CP-SAT 在存档的搜索
+预算下取得了进一步改进，但这一改进不能完全归功于求解器，因为 CP-SAT 还允许灵活的充电量。
 
-\begin{table}[H]
-\centering\small
-\begin{tabular}{lrrrrrr}
-\toprule
-策略 & $C_{\max}$ & 迟到 & 排队 & 能耗 & $J$ & $J'$\textsuperscript{c} \\
-\midrule
-FCFS & 0.250 & 0.250 & 0.250 & 0.250 & 1.00 & 1.00 \\
-联合贪心 & 0.233 & 0.182 & 0.160 & 0.218 & 0.79 & 0.84 \\
-滚动 & 0.211 & 0.157 & 0.048 & 0.219 & 0.64 & 0.78 \\
-CP-SAT & 0.178 & 0.088 & 0.000 & 0.202 & 0.47 & 0.62 \\
-CP-SAT 无储备 & 0.132 & 0.039 & 0.000 & 0.178 & 0.35 & 0.47 \\
-\bottomrule
-\end{tabular}
-\caption{各归一化项对 $J$ 的平均贡献（基础设置）。\textsuperscript{c}$J' = (C_{\max} + \text{迟到} + \text{能耗})/0.75$，
-即去掉排队项后对其余三项重新加权的 $J$。}
-\label{tab:terms}
-\end{table}
+算例轨迹揭示了一个具体瓶颈：固定充到 95\pct\ 可能长时间占用充电位，进而推迟其他机器人的作业。部分充电和任务重排
+可以减少这种延误，但二者各自的贡献尚未分离。
 
-两种 CP-SAT 方法都\emph{几乎消除了排队}（CP-SAT 平均 5.6\,s，且全部来自一个种子；启发式规则在 X 处为 23--37\,s，在充电位为
-0.9--1.5 千秒）。机器人仍然会等待，但等待发生在出发前最后一个站点的断电待机状态，而不是在 X 前或 H 处。在模型中，待机不耗电，
-而排队会耗电并计入 $J$，因此优化器会推迟出发直到资源空闲；启发式规则则是先预约时隙再开到等待点。这在模型内是合理的，但 CP-SAT 在
-$J$ 上的改进约有一半来自排队项。去掉该项后性能层级不变（表~\ref{tab:terms} 中的 $J'$），CP-SAT 仍明显最优：相对 FCFS 总迟到时间
-减少 62\pct、完工时间缩短 28\pct（相对联合贪心分别为 44\pct\ 和 23\pct）。
-
-迟到减少的一个合理的主要来源是充电：CP-SAT 的充电次数与联合贪心相近（4.2 次对 3.9 次），但它自行选择\emph{充多少}以及何时充，
-而启发式规则总是以 5\pct/min 的速度充到 95\pct，每次最长 17 分钟，且常常发生在繁忙时段。部分充电在电动车辆路径问题中同样被证明有益 \cite{keskin2016}，
-第~\ref{sec:case}~节的算例在单个实例上展示了这一机制。CP-SAT 同时还改变了任务分配、顺序和出发时间，
-因此实验并未单独分离出这一效应；固定 95\pct\ 目标的 CP-SAT 运行才是对照实验。
-
-\subsection{时域末端的电量储备}
-\label{sec:reserve}
-
-最初的 CP-SAT 实验不要求最后一个任务之后保留电量。优化器因此常常以接近安全阈值的电量结束，并在初始电量足够时跳过充电：
-在所有 20 个任务的实例上它从未充电，在 40 个任务时充电次数只有启发式规则的一半（2.0 次对 3.9--5.4 次）。启发式规则则总是保留足以排在满队列
-之后到达充电位的电量。对 CP-SAT 施加同样的储备后，40 个任务时其 $J$ 从 0.349 升至 0.468，但在 60 个任务时几乎没有影响
-（中位数 $-51$\pct\ 对 $-47$\pct），因为此时机器人无论如何都必须充电。因此，在中等负载下离线 CP-SAT 表面优势中约五分之一
-（65 个百分点中的 12 个）来自时域末端效应。任何把离线方法与持续运行策略比较的研究都需要明确的末端条件。
-
-第二个较小的教训：优化器把末端电量恰好放在储备边界上，而仿真器的储备检查在前往 H 的途中还计入了在 X 前排队的耗电，因此拒绝了许多这样的计划，
-使其回退到初始解（开发过程中，一次部分运行的 115 行结果中有 32 行回退，部分实例在多个实验中重复计数；这些行已被丢弃）。加入
-$\delta = 0.5$\pct\ 的余量后，最终 100 个实例中没有一个回退。模型与仿真器的精确一致，恰恰在优化器逼近约束边界时最为重要。
-
-\subsection{归一化目标函数}
-\label{sec:norm}
-
-按 FCFS 归一化达到了目的：否则按优先级加权的迟到时间（数万秒）会比其他项大两个数量级，而归一化后四项的贡献相当。代价是在 FCFS
-某一项接近零的实例上结果不稳定。在一个 2:1 实例上，FCFS 只排队了 18\,s，于是排队项被除以 60\,s 的下限，联合贪心 735\,s 的排队
-单独就为其 $J$ 增加了 $0.25 \times 735/60 \approx 3.06$（总计 3.7），尽管联合贪心在完工时间、迟到和能耗上都优于 FCFS。同样的效应使
-20 个任务时分阶段和截止时间优先的均值大于 1（中位数为 0.96--0.97）。因此全文报告中位数和配对比较。更稳健的做法是用固定的、与实例无关的
-尺度归一化（例如整个实验的均值），或用该实例上所有策略的中位数归一化。
-
-\subsection{在线与离线}
-
-滚动策略是唯一不知道未来任务的方法，但在基础设置下它仍优于所有预知未来任务的启发式规则（中位数 $-37$\pct\ 对联合贪心的 $-23$\pct），
-并且在 20 个任务、单个充电位、2:1 区域不平衡和紧急任务设置下比联合贪心领先 8--14 个百分点。它的弱点正是滚动时域方法的典型问题：
-在 20--30\pct\ 的安全阈值下，每个窗口的储备要求迫使其提前充电；在 60 个任务或 3:1 不平衡时，短视的前瞻无法绕开瓶颈，因此只与联合贪心
-持平（在 20\pct\ 阈值下略落后）。它的每次重规划受确定性求解工作量约束（在 2 vCPU 机器上每次约 1\,s，一整天 40 个任务共 49\,s），
-因此可以实时运行。在 OR-Tools 版本相同、单线程且墙钟上限不起作用的条件下，其调度在不同机器上逐位一致（已在两台机器上验证）；
-运行时间自然不同。
+短预算结果也说明了计算限制的重要性：CP-SAT 可能直接返回经过验证的联合贪心调度而没有改进。因此，联合贪心
+是实用的初始解和回退方案，而在搜索时间充足时，CP-SAT 能够提升调度质量。解读结果时应依据实测的目标值、
+资源排队和计算时间，而不仅仅是求解器的状态标签。
 
 \subsection{局限性}
 
-\begin{itemize}
-\item CP-SAT 结果依赖硬件（墙钟时间预算）；所有结果都在同一机型上得到。
-\item 最优性间隙较大；要声称接近最优，需要更好的下界（例如按环路的松弛）。
-\item 启发式规则能看到所有未来任务，这相对滚动策略对其有利，但相对离线 CP-SAT 则不然。
-\item 充电模型是线性的，而实际电池在接近充满时充电变慢 \cite{montoya2017}；网络只有一个交叉口，机器人沿固定路线移动，
-  不考虑运动学和一般的路径规划 \cite{stern2019}。
-\end{itemize}
+结果只适用于本文所考虑的四机器人固定路线系统和合成工作负载。验证表明调度满足所建模的资源与电池约束，但
+不能证明一般意义上的避碰（这需要如文献~\cite{li2024conflict} 那样的运动层冲突模型），也不能证明物理部署的
+安全性。
 
+启发式规则使用固定的充电目标，而 CP-SAT 允许灵活的充电量，因此无法分离充电灵活性与任务重排各自的作用。
+此外，离线方法预知未来任务，而滚动时域 CP-SAT 仅掌握在线信息，因此二者无法在相同信息条件下直接比较。模型假设电池充放电行为确定且
+呈线性；若考虑能耗的不确定性，需要引入随机模型，例如 Ricard 等~\cite{ricard2026chance} 针对电动公交提出的机会约束电池管理。
+
+最后，存档实验与本地实验在硬件、代码版本和求解预算上都不同。存档研究每种配置使用 10 个种子，本地检查只用
+3 个，且未进行正式的显著性检验。要分离各项调度决策的影响，还需要更受控的比较。
+
+%==================================================================================================
 \section{结论}
+\label{sec:conclusion}
 
-本项目为共用一个交叉口和一个充电区的两条配送环路构建了仿真器，配有独立验证器、浏览器回放以及在相同固定种子实例上比较六种策略
-（另加一个消融实验）的实验流程。在 700 次通过验证的运行中：
-\begin{enumerate}
-\item \textbf{联合决定任务、交叉口时隙和充电是值得的。}在基础设置下，各单一规则基线（FCFS、截止时间优先、分阶段）彼此相差不过几个百分点，
-  联合贪心启发式改进约 20\pct，而在一个模型中优化全部决策的 CP-SAT 在 $J$ 上改进约 50\pct（相对 FCFS 迟到时间减少 62\pct、完工时间缩短
-  28\pct）。在所有敏感性设置下，CP-SAT 保持在 $-47$\pct\ 到 $-62$\pct（中位数），联合贪心在 $-8$\pct\ 到 $-30$\pct\ 之间变化，
-  而分阶段基线可能比 FCFS 差很多（单个充电位时 $+45$\pct）。
-\item \textbf{充电是瓶颈。}高负载下限制队伍的是充电位而不是交叉口：对每种启发式规则，每次运行在 X 处的平均排队都不到一分钟，
-  而充电排队可达数千秒。选择充多少、何时充是 CP-SAT 迟到更少的最合理解释（尚未通过实验单独分离），而把充电决策与任务分配分开
-  （分阶段基线）在单个充电位时表现最差。
-\item \textbf{在线再优化是可行的。}滚动 CP-SAT 在不知道未来任务的情况下，在中等负载时优于所有启发式规则，每次重规划约需一秒；
-  在高负载或高安全阈值下它只与联合贪心启发式持平。
-\item \textbf{公平比较需要谨慎。}要求相同的时域末端电量储备显著改变了 CP-SAT 的结果（$J$：0.35 $\to$ 0.47），而归一化目标函数必须结合
-  中位数解读，因为接近零的参考项可能主导它。
-\end{enumerate}
+本项目针对固定双环路系统实现了任务、交叉口与充电的联合调度。在存档基础实验中，保留末端储备的 CP-SAT 相对 FCFS
+将平均 $J$ 降低 53.2\pct，完工时间缩短 28.3\pct。本地算例表明，更短的调度伴随着更少的充电位占用与排队，
+而短预算批量检查没有发现超出联合贪心的改进，说明求解预算与调度模型同样重要。
+
+末端储备以有限批次内的性能换取全部任务结束后仍能安全前往充电。滚动时域规划在冻结已提交动作的前提下处理已释放的任务，但要
+公平地对在线方法排名，仍需要信息条件相同的基线。现有证据支持所测试的合成系统及其资源规则；更广泛的交通
+安全、实时性保证和工厂部署还需要进一步的建模与测量。
 
 \input{references}
+
+%==================================================================================================
+\appendix
+\section{完整模型}
+\label{app:model}
+
+实现中使用 $V_k = \{0\} \cup I_k \cup Q_k$，其中 $I_k$ 为机器人 $k$ 所在环路上的任务集合，$Q_k$ 为其可选充电时段。任务的存在变量为 $z_{ki} = x_{ik}$，充电访问为
+$z_{kq} = y_{kq}$，且 $z_{k0} = 1$；分配 $x$、弧 $a$、激活 $y$ 和充电位 $b$ 均为布尔变量。下列各式以秒和
+SOC 百分点为单位；在内部，时间变量是 $[0, \bar H]$ 内的整数刻度，节点 SOC 和充电目标位于 $[U S_{\min}, 100U]$ 内。
+虚拟初始状态固定了初始可用时间、位置和 SOC。
+\begin{equation}
+\sum_{k:\, i \in I_k} x_{ik} = 1, \qquad a_{knn} = 1 - z_{kn} \quad (n \ne 0), \qquad
+\textsc{Circuit}(a_k).
+\end{equation}
+每条被选中的非自环弧都属于经过顶点 0 的唯一回路，虚拟初始顶点的自环表示机器人闲置。被选中的弧 $a \to n$（$n \ne 0$）
+要求 $s_{kn} \ge f_{ka}$，并计入前往取货点或 H 的固定入向行驶。任务副本在被选中时共享 $s_i, c_i$，且
+$s_i \ge r_i$；装货、载货行驶和卸货按等式约束依次推进时间。未激活访问的时间为零，未激活的通行与充电等待也为零。
+充电访问按顺序使用：$y_{k,q+1} \le y_{kq}$，当 $y_{k,q+1} = 1$ 时 $s_{k,q+1} \ge f_{kq}$。禁止从充电访问直接连到虚拟终点的弧；
+从任务连到虚拟终点的闭合弧不含返程行驶。
+\begin{gather}
+e = \text{arrival} + w, \qquad l = e + \tau^{X}_{kr}, \qquad \textsc{NoOverlap}\{[e,\, l + \delta)\}, \\
+\sum_{p} b_{kqp} = y_{kq}, \qquad u = h + w^{C} + \tau_{Hp}, \qquad f = u + D + \tau_{pH}, \\
+S^{-} = S^{H} - \rho_w w^{C} - g_{Hp} \ge S_{\min}, \qquad S^{+} = S^{-} + \rho_c D \le 100, \qquad
+S^{+} - g_{pH} \ge S_{\min}.
+\end{gather}
+其中 $\tau^{X}_{kr}$ 为该次通行驶入 X 的边的行驶时间。资源排队只发生在 WA、WB 或 H，绝不在 X 内。充电等式只对选中的充电位生效，其可选区间加入该充电位的
+\code{NoOverlap}。以刻度计，启用的 $D$ 介于 1 与 $\lceil 100U/\alpha \rceil$ 之间，其中
+$\alpha = \lfloor \rho_c U / T \rfloor$。在每条被选中且不含充电的路径上，
+$S_{\text{out}} = S_{\text{in}} - \sum g - \rho_w \sum w$（含装卸）。冻结的预约是强制的。最后一次送达后必须
+在安全下限之上保留前往充电位的能耗、$3(95 - S_{\min})\rho_w/\rho_c$ 以及 0.5 个百分点的余量；解码时还会检查
+实际可达性。
+\begin{equation}
+\min\ J = \frac{1}{4}\left( \frac{C_{\max}}{\hat R_C} + \frac{\sum_i p_i T_i}{\hat R_T}
+  + \frac{W_X + W_C}{\hat R_W} + \frac{E}{\hat R_E} \right), \qquad C_{\max} = \max_i c_i .
+\end{equation}
+
+归一化分母取 FCFS 各分项，并以 $(1, 60, 60, 1)$ 为下限；$E$ 不计补电。滚动时域求解保留已固定的历史贡献，只用
+已知任务归一化。取 $T = 1000$ 刻度/秒、$U = 60\,000\,000$ SOC 单位/百分点，时长、释放时间、能耗和排队耗电
+向上取整，截止时间、初始 SOC 和充电增量向下取整。不在网格上的路径在每次通过交叉口或前往充电位时额外计入
+20 个刻度的耗电作为模型保护；这部分计入模型中的 $E$，但不出现在解码后的动作中。访问时间上界为
+$\bar H = \lceil T\,[\,t_0 + (|I| + 8)(20\,\tau_{\max} + 5000)\,] \rceil$，其中 $t_0$ 为最晚的初始时间或
+释放时间，$\tau_{\max}$ 为最长的边行驶时间。机器人 $k$ 拥有 $\max(q_k^{\text{hint}},\, 1,\, \lfloor |I_k|/5 \rfloor)$ 个充电时段，其中 $q_k^{\text{hint}}$ 为联合贪心初始解中机器人 $k$ 的充电次数；显式上限
+也会约束回退方案。返回有效解码候选与可接受的联合贪心计划中实际 $J$ 较低者；二者都不可用时运行失败。
+OPTIMAL 指的是这一有界整数模型。
+
+\section{实验数据与调度输出}
+\label{app:data}
+
+\subsection{输入任务列表}
+
+表~\ref{tab:tasklist} 列出算例的全部 12 项任务。这些任务为合成数据，在 FCFS、CP-SAT 和滚动时域优化中保持不变；
+所有时间单位为秒。R1--R4 的初始 SOC 为 50.1、53.9、52.2 和 80.8\pct，安全下限为 25\pct，启用两个充电位。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{完整输入任务列表。}
+\label{tab:tasklist}
+\begin{tabular}{llrrrrr}
+\toprule
+任务 & 取货 $\to$ 送货 & 释放 & 截止 & 装货 & 卸货 & 优先级 \\
+\midrule
+T005 & B4 $\to$ B3 & 30 & 835 & 10 & 20 & 2 \\
+T012 & A4 $\to$ A2 & 40 & 547 & 20 & 15 & 1 \\
+T004 & B1 $\to$ B2 & 100 & 989 & 10 & 15 & 3 \\
+T002 & B4 $\to$ B3 & 110 & 729 & 15 & 10 & 3 \\
+T008 & B2 $\to$ B3 & 130 & 911 & 15 & 15 & 1 \\
+T003 & B4 $\to$ B3 & 170 & 748 & 20 & 10 & 2 \\
+T007 & B2 $\to$ B3 & 180 & 1072 & 20 & 20 & 1 \\
+T009 & A2 $\to$ A1 & 190 & 829 & 20 & 15 & 1 \\
+T010 & A2 $\to$ A1 & 190 & 937 & 10 & 20 & 1 \\
+T011 & A2 $\to$ A1 & 200 & 1023 & 15 & 20 & 2 \\
+T001 & B1 $\to$ B2 & 240 & 720 & 15 & 10 & 1 \\
+T006 & A1 $\to$ A3 & 280 & 944 & 10 & 20 & 3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{机器人调度与充电记录}
+
+表~\ref{tab:sequences} 给出 CP-SAT 解码后每台机器人的任务顺序。“最后送达”指该机器人最后一项运输任务的完成
+时间；最终 SOC 和能耗针对其完整的动作轨迹。环路 A 在 1\,165.2\,s 完成，环路 B 在 947.4\,s 完成，因此完工
+时间为 1\,165.2\,s，$J = 0.4472$，最低 SOC 为 25.9\pct，无约束违反。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{机器人任务顺序与结果（CP-SAT）。}
+\label{tab:sequences}
+\begin{tabular}{llrrr}
+\toprule
+机器人 & 任务顺序 & 最后送达（s） & 最终 SOC（\%） & 能耗（百分点） \\
+\midrule
+R1 & T009, T006 & 984.8 & 42.5 & 33.8 \\
+R2 & T012, T011, T010 & 1165.2 & 46.5 & 52.0 \\
+R3 & T005, T004, T007 & 947.4 & 42.5 & 45.4 \\
+R4 & T001, T008, T002, T003 & 602.0 & 51.6 & 29.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+表~\ref{tab:r1charge} 将 R1 的充电访问展开为到达与离开、排队、充电时长和 SOC。FCFS 下 R1 在 H 排队
+634.4\,s；CP-SAT 则安排 R1 在充电位空出后才到达，并且只充到 52.1\pct。从 H 到 C1 行驶需要 20\,s。
+
+\begin{table}[!htbp]
+\centering\small
+\caption{R1 的充电访问记录。}
+\label{tab:r1charge}
+\begin{tabular}{llcrrc}
+\toprule
+策略 & 节点 & 到达 / 离开（s） & 排队（s） & 充电（s） & 进 / 出 SOC（\%） \\
+\midrule
+FCFS & H & 116.0 / 750.4 & 634.4 & 0 & 39.5 / 37.4 \\
+FCFS & C1 & 770.4 / 1486.2 & 0 & 715.8 & 35.4 / 95.0 \\
+CP-SAT & H & 534.4 / 534.4 & 0 & 0 & 27.9 / 27.9 \\
+CP-SAT & C1 & 554.4 / 868.8 & 0 & 314.4 & 25.9 / 52.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+三种策略的完整输出共包含 36 条任务记录、372 条动作记录和 265 次途经点访问。动作记录保留机器人和任务编号、
+节点、开始和结束时间、能量、SOC 和资源；能量为正表示消耗，为负表示补电。60 次本地补充运行与 700 次不同的
+历史运行分开保存，因为二者的代码版本和预算不同。
+
+\section{关键代码}
+\label{app:code}
+
+\paragraph{交叉口预约。}\code{optimizer.py} 中的 \code{JointModel.path} 将被选中的一次通过转换为可选区间，
+其长度为 $\tau^{X}_{kr} + \delta$（即代码中的 \code{dt + self.gap}）；未激活访问的进入时间和等待均为零。随后每种
+资源各用一个 \code{NoOverlap}，保证 X 和每个充电位的容量。
+\begin{lstlisting}
+wait, entry = self.var('w_cross'), self.var('e_kr')
+self.model.add(entry == at + wait).only_enforce_if(use)
+self.model.add(entry == 0).only_enforce_if(~use)
+self.model.add(wait == 0).only_enforce_if(~use)
+self.resources['X'].append(self.model.new_optional_fixed_size_interval_var(
+    entry, dt + self.gap, use, 'X'))
+...
+for intervals in self.resources.values():   # X, C1, C2
+    m.add_no_overlap(intervals)
+\end{lstlisting}
+
+\paragraph{解码与安全回退。}CP-SAT 的解先经规划器重放和验证，启用末端储备时还需满足该要求，再按实际目标值与联合贪心初始解比较；否则保留
+初始解并记录原因。
+\begin{lstlisting}
+decoded = joint.decode(solver)             # replay through Planner
+build_result(decoded, base.results + tasks, 'cpsat',
+             started, opts['norm'])        # independent validation
+if opts['terminal_reserve']:               # robots active in this solve
+    for k in active:                       # (index set abridged)
+        decoded.ensure_reserve(k)          # charger reachable at end
+if (selected is None or score(decoded, opts['norm'])
+        <= score(selected, opts['norm']) + 1e-7):
+    selected = decoded
+else:
+    metadata['fallback'] = 'joint hint has a lower decoded objective'
+\end{lstlisting}
+
+\paragraph{复现。}仓库（快照 \code{9bf0b70}）可在 Python~3.12 及以上版本和 OR-Tools~9.15.6755 下运行，以下命令依次运行测试、用当前代码重新运行实验设计（存档结果来自较早的若干版本，见第~\ref{sec:setup}~节）以及启动浏览器回放：
+\begin{lstlisting}[language=bash]
+python -m unittest discover -s tests          # 69 tests
+python experiments.py --seeds 10 --time-limit 120 --out results
+python app.py                                 # browser replay
+\end{lstlisting}
 
 \end{document}
